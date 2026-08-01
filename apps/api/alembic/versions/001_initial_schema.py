@@ -167,7 +167,7 @@ def upgrade() -> None:
         sa.Column("event_type", sa.Enum("repo_connected", "spec_uploaded", "tasks_generated", "commit_received", "suggestion_created", "suggestion_approved", "suggestion_rejected", "task_updated", "webhook_installed", name="activity_type"), nullable=False),
         sa.Column("title", sa.String(512), nullable=False),
         sa.Column("description", sa.Text, nullable=True),
-        sa.Column("metadata", postgresql.JSONB, nullable=True),
+        sa.Column("event_metadata", postgresql.JSONB, nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
     )

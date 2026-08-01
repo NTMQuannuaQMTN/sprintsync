@@ -11,6 +11,7 @@ import type {
   Suggestion,
   DashboardData,
   ActivityItem,
+  CommitDetail,
 } from './types'
 
 const BASE = '/api/v1'
@@ -100,10 +101,10 @@ export const tasksApi = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
-  bulkCreate: (repoId: string, tasks: Partial<Task>[]) =>
+  bulkCreate: (repoId: string, tasks: Partial<Task>[], specId?: string) =>
     request<Task[]>(`/repositories/${repoId}/tasks/bulk`, {
       method: 'POST',
-      body: JSON.stringify({ tasks }),
+      body: JSON.stringify({ tasks, spec_id: specId }),
     }),
   update: (repoId: string, taskId: string, data: Partial<Task>) =>
     request<Task>(`/repositories/${repoId}/tasks/${taskId}`, {
@@ -161,4 +162,13 @@ export const suggestionsApi = {
 export const activityApi = {
   list: (repoId: string, limit = 50) =>
     request<ActivityItem[]>(`/repositories/${repoId}/activity?limit=${limit}`),
+}
+
+// ─── Commits ──────────────────────────────────────────────────────────────────
+
+export const commitsApi = {
+  list: (repoId: string, limit = 30) =>
+    request<CommitDetail[]>(`/repositories/${repoId}/commits?limit=${limit}`),
+  get: (repoId: string, commitId: string) =>
+    request<CommitDetail>(`/repositories/${repoId}/commits/${commitId}`),
 }

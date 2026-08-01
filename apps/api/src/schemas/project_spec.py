@@ -1,9 +1,10 @@
 """ProjectSpecification Pydantic schemas."""
 import uuid
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 from pydantic import BaseModel
 from src.models.project_spec import SpecStatus
+from src.schemas.task import TaskCreate
 
 
 class SpecOut(BaseModel):
@@ -18,5 +19,9 @@ class SpecOut(BaseModel):
     task_count: int
     error_message: Optional[str] = None
     created_at: datetime
+
+    # AI-extracted tasks awaiting human review — NOT yet persisted as Task rows.
+    # Populated only by the upload endpoint's response; empty on list/get.
+    draft_tasks: List[TaskCreate] = []
 
     model_config = {"from_attributes": True}

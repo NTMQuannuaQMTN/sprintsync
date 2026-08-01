@@ -4,7 +4,7 @@ Uses a simple heuristic/pattern-based approach as a placeholder.
 Replace with actual LLM (Tencent WorkBuddy / OpenAI) calls.
 """
 import re
-from typing import List, Optional
+from typing import List
 
 from src.schemas.task import TaskCreate
 from src.models.task import TaskPriority, TaskStatus
@@ -21,7 +21,7 @@ class AIService:
         tasks: List[TaskCreate] = []
 
         # Heuristic patterns for common spec document structures
-        lines = [l.strip() for l in text.split("\n") if l.strip()]
+        lines = [line.strip() for line in text.split("\n") if line.strip()]
 
         # Pattern 1: numbered/bulleted items that look like tasks
         task_patterns = [
@@ -84,7 +84,6 @@ class AIService:
 
         commit_lower = commit_message.lower()
         files = [f.get("filename", "") for f in (files_changed or [])]
-        files_str = " ".join(files).lower()
 
         # Heuristic: look for completion indicators
         completion_keywords = [
@@ -110,7 +109,6 @@ class AIService:
                 matched_reasons.append(f"Keywords match: {', '.join(list(overlap)[:3])}")
 
             # File name hints
-            task_slug = re.sub(r"\s+", "_", task_lower[:30])
             file_hints = [f for f in files if any(w in f for w in list(task_words)[:5])]
             if file_hints:
                 confidence += 0.3

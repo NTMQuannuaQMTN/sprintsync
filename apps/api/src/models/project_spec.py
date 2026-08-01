@@ -4,7 +4,7 @@ import enum
 from typing import Optional
 
 from sqlalchemy import String, Text, Integer, ForeignKey, Enum as SAEnum, Index
-from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.core.database import Base

@@ -3,10 +3,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.trustedhost import TrustedHostMiddleware
 
 from src.core.config import settings
-from src.core.database import engine
 from src.models import base  # noqa: F401 — ensure models are imported for Alembic
 from src.api.v1.router import api_router
 

@@ -113,24 +113,18 @@ async def upload_spec(
 
     spec.extracted_text = extracted_text
 
-    # AI task extraction
-    tasks_data = await ai_service.extract_tasks_from_text(extracted_text, repo.name)
-
-    # Save tasks
-    saved_tasks = []
-    for i, td in enumerate(tasks_data):
-        task = Task(
-            repository_id=repo_id,
-            spec_id=spec.id,
-            order_index=i,
-            **td.model_dump(),
-        )
-        db.add(task)
-        saved_tasks.append(task)
+    # AI task extraction — these are DRAFTS ONLY. Nothing is written to the
+    # tasks table here; the human must review and confirm via
+    # POST /repositories/{repo_id}/tasks/bulk (with spec_id set) before any
+    # Task row is created. task_count stays 0 until that confirmation happens.
+    draft_tasks = await ai_service.extract_tasks_from_text(extracted_text, repo.name)
 
     spec.status = SpecStatus.DONE
-    spec.task_count = len(saved_tasks)
-    spec.ai_summary = f"Extracted {len(saved_tasks)} implementation tasks from {file.filename}."
+    spec.task_count = 0
+    spec.ai_summary = (
+        f"AI extracted {len(draft_tasks)} draft task(s) from {file.filename}. "
+        f"Review and save the ones you want to keep."
+    )
 
     # Activity log
     log = ActivityLog(
@@ -138,13 +132,16 @@ async def upload_spec(
         repository_id=repo_id,
         event_type=ActivityType.SPEC_UPLOADED,
         title=f"Uploaded specification: {file.filename}",
-        description=f"AI extracted {len(saved_tasks)} tasks",
+        description=f"AI drafted {len(draft_tasks)} tasks pending review",
     )
     db.add(log)
 
     await db.commit()
     await db.refresh(spec)
-    return SpecOut.model_validate(spec)
+
+    out = SpecOut.model_validate(spec)
+    out.draft_tasks = draft_tasks
+    return out
 
 
 @router.get("/{spec_id}/tasks", response_model=List[TaskOut])

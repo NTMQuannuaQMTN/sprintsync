@@ -48,3 +48,4 @@ TaskOut.model_rebuild()
 
 class TaskBulkCreate(BaseModel):
     tasks: List[TaskCreate]
+    spec_id: Optional[uuid.UUID] = None

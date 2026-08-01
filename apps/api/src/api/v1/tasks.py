@@ -10,6 +10,7 @@ from src.core.database import get_db
 from src.core.security import get_current_user_id
 from src.models.repository import Repository
 from src.models.task import Task, TaskStatus
+from src.models.project_spec import ProjectSpecification
 from src.models.activity_log import ActivityLog, ActivityType
 from src.schemas.task import TaskCreate, TaskUpdate, TaskOut, TaskBulkCreate
 
@@ -80,21 +81,40 @@ async def bulk_create_tasks(
     user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
-    """Bulk create tasks (used after AI extraction)."""
+    """Bulk create tasks. Used both for manual bulk-add and to persist AI-extracted
+    draft tasks once a human has reviewed them (see specs.py — spec upload only
+    returns drafts, it never saves tasks directly)."""
     repo = await _assert_repo_owner(repo_id, user_id, db)
+
+    spec: Optional[ProjectSpecification] = None
+    if data.spec_id:
+        spec_result = await db.execute(
+            select(ProjectSpecification).where(
+                ProjectSpecification.id == data.spec_id, ProjectSpecification.repository_id == repo_id
+            )
+        )
+        spec = spec_result.scalar_one_or_none()
+        if not spec:
+            raise HTTPException(status_code=404, detail="Specification not found")
 
     tasks = []
     for i, td in enumerate(data.tasks):
-        t = Task(repository_id=repo_id, order_index=i, **td.model_dump())
+        t = Task(repository_id=repo_id, spec_id=data.spec_id, order_index=i, **td.model_dump())
         db.add(t)
         tasks.append(t)
+
+    if spec:
+        spec.task_count = (spec.task_count or 0) + len(tasks)
 
     # Log activity
     log = ActivityLog(
         user_id=user_id,
         repository_id=repo_id,
         event_type=ActivityType.TASKS_GENERATED,
-        title=f"Generated {len(tasks)} tasks for {repo.name}",
+        title=f"Saved {len(tasks)} reviewed task(s) for {repo.name}"
+        if spec
+        else f"Generated {len(tasks)} tasks for {repo.name}",
+        description=f"From specification: {spec.filename}" if spec else None,
     )
     db.add(log)
 

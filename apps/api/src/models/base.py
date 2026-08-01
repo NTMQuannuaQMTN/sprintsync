@@ -1,12 +1,11 @@
 """Base model mixin with UUID primary key and timestamps."""
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 
 from sqlalchemy import DateTime, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from src.core.database import Base
 
 
 class TimestampMixin:

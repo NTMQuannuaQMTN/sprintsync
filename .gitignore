@@ -2,3 +2,4 @@
 node_modules
 apps/web/.next
 apps/api/.env.example
+apps/api/.venv

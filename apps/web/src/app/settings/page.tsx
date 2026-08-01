@@ -1,8 +1,8 @@
 'use client'
 
 import { useState } from 'react'
-import { Sidebar } from '@/components/layout/Sidebar'
-import { Header } from '@/components/layout/Header'
+import AppShell from '@/components/layout/AppShell'
+import { useAuth } from '@/providers/AuthProvider'
 import { Settings, User, Bell, Shield, Cpu, Palette, ChevronRight } from 'lucide-react'
 
 type Section = 'profile' | 'notifications' | 'security' | 'ai' | 'appearance'
@@ -15,40 +15,46 @@ const sections: { id: Section; label: string; icon: typeof Settings; description
   { id: 'appearance',    label: 'Appearance',    icon: Palette,    description: 'Theme and display' },
 ]
 
-function ProfileSection() {
+function ProfileSection({ user }: { user: ReturnType<typeof useAuth>['user'] }) {
+  const displayName = user?.name || user?.github_username || ''
   return (
     <div className="space-y-5">
       <div>
         <h2 className="text-[15px] font-semibold text-gray-900 mb-4">Profile</h2>
         <div className="flex items-center gap-4 mb-6">
-          <div className="w-16 h-16 rounded-full bg-gradient-to-br from-violet-400 to-indigo-500 flex items-center justify-center">
-            <span className="text-[18px] font-bold text-white">SC</span>
-          </div>
+          {user?.avatar_url ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={user.avatar_url} alt={displayName} className="w-16 h-16 rounded-full" />
+          ) : (
+            <div className="w-16 h-16 rounded-full bg-gradient-to-br from-violet-400 to-indigo-500 flex items-center justify-center">
+              <span className="text-[18px] font-bold text-white">{displayName ? displayName[0].toUpperCase() : '?'}</span>
+            </div>
+          )}
           <div>
-            <p className="text-[14px] font-semibold text-gray-900">Sarah Chen</p>
-            <p className="text-[13px] text-gray-500">sarah.chen@acme.com</p>
-            <button className="mt-1 text-[12px] text-blue-600 hover:text-blue-700 font-medium">Change avatar</button>
+            <p className="text-[14px] font-semibold text-gray-900">{displayName}</p>
+            <p className="text-[13px] text-gray-500">{user?.email || 'No public email on GitHub'}</p>
           </div>
         </div>
+        <p className="text-[12px] text-gray-400 mb-4">
+          Profile fields are synced from GitHub at sign-in and aren&apos;t editable here yet.
+        </p>
         <div className="space-y-4">
           {[
-            { label: 'Display Name', value: 'Sarah Chen', type: 'text' },
-            { label: 'Email', value: 'sarah.chen@acme.com', type: 'email' },
-            { label: 'GitHub Username', value: 'sarahchen', type: 'text' },
+            { label: 'Display Name', value: displayName, type: 'text' },
+            { label: 'Email', value: user?.email || '', type: 'email' },
+            { label: 'GitHub Username', value: user?.github_username || '', type: 'text' },
           ].map(({ label, value, type }) => (
             <div key={label}>
               <label className="block text-[12px] font-semibold text-gray-600 mb-1">{label}</label>
               <input
                 type={type}
-                defaultValue={value}
-                className="w-full max-w-md px-3 py-2 text-[13px] border border-gray-200 rounded-lg bg-white focus:outline-none focus:border-gray-400 transition-colors"
+                value={value}
+                readOnly
+                className="w-full max-w-md px-3 py-2 text-[13px] border border-gray-200 rounded-lg bg-gray-50 text-gray-600 focus:outline-none cursor-not-allowed"
               />
             </div>
           ))}
         </div>
-        <button className="mt-5 px-4 py-2 bg-gray-900 text-white text-[13px] font-medium rounded-lg hover:bg-gray-800 transition-colors">
-          Save Changes
-        </button>
       </div>
     </div>
   )
@@ -132,7 +138,8 @@ function AISection() {
   )
 }
 
-function SecuritySection() {
+function SecuritySection({ user }: { user: ReturnType<typeof useAuth>['user'] }) {
+  const { logout } = useAuth()
   return (
     <div>
       <h2 className="text-[15px] font-semibold text-gray-900 mb-4">Security</h2>
@@ -140,28 +147,18 @@ function SecuritySection() {
         <div className="p-4 bg-white border border-gray-200 rounded-lg flex items-center justify-between">
           <div>
             <p className="text-[13px] font-semibold text-gray-700">GitHub OAuth</p>
-            <p className="text-[12px] text-green-600 mt-0.5">Connected as sarahchen</p>
+            <p className="text-[12px] text-green-600 mt-0.5">
+              {user ? `Connected as ${user.github_username}` : 'Not connected'}
+            </p>
           </div>
-          <button className="text-[12px] text-red-500 hover:text-red-700 font-medium">Revoke</button>
+          <button onClick={logout} className="text-[12px] text-red-500 hover:text-red-700 font-medium">
+            Sign out
+          </button>
         </div>
-        <div className="p-4 bg-white border border-gray-200 rounded-lg flex items-center justify-between">
-          <div>
-            <p className="text-[13px] font-semibold text-gray-700">Two-Factor Authentication</p>
-            <p className="text-[12px] text-gray-500 mt-0.5">Add an extra layer of security</p>
-          </div>
-          <button className="px-3 py-1.5 text-[12px] font-medium bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors">Enable 2FA</button>
-        </div>
-        <div className="p-4 bg-white border border-gray-200 rounded-lg">
-          <p className="text-[13px] font-semibold text-gray-700 mb-1">Active Sessions</p>
-          <p className="text-[12px] text-gray-500 mb-3">Devices currently logged in to your account</p>
-          <div className="flex items-center justify-between py-2 border-t border-gray-100">
-            <div>
-              <p className="text-[12px] font-medium text-gray-700">MacBook Pro — Safari</p>
-              <p className="text-[11px] text-gray-400">San Francisco, CA · Current session</p>
-            </div>
-            <span className="text-[11px] text-green-600 font-semibold">Active now</span>
-          </div>
-        </div>
+        <p className="text-[12px] text-gray-400">
+          Two-factor authentication and session management are handled by GitHub — manage them from your
+          GitHub account settings.
+        </p>
       </div>
     </div>
   )
@@ -205,7 +202,9 @@ function AppearanceSection() {
   )
 }
 
-const sectionComponents: Record<Section, React.FC> = {
+type SectionProps = { user: ReturnType<typeof useAuth>['user'] }
+
+const sectionComponents: Record<Section, React.FC<SectionProps>> = {
   profile:       ProfileSection,
   notifications: NotificationsSection,
   security:      SecuritySection,
@@ -215,52 +214,47 @@ const sectionComponents: Record<Section, React.FC> = {
 
 export default function SettingsPage() {
   const [active, setActive] = useState<Section>('profile')
+  const { user } = useAuth()
   const ActiveSection = sectionComponents[active]
 
   return (
-    <div className="flex h-screen overflow-hidden">
-      <Sidebar />
-      <div className="flex-1 flex flex-col ml-[240px] min-w-0">
-        <Header />
-        <main className="flex-1 overflow-y-auto pt-[60px]">
-          <div className="p-6 max-w-[1440px] mx-auto">
-            <div className="mb-6">
-              <h1 className="text-[20px] font-bold text-gray-900">Settings</h1>
-              <p className="text-[13px] text-gray-500 mt-0.5">Manage your account and SprintSync AI preferences</p>
-            </div>
+    <AppShell headerTitle="Settings">
+      <div className="p-6 max-w-[1440px] mx-auto">
+        <div className="mb-6">
+          <h1 className="text-[20px] font-bold text-gray-900">Settings</h1>
+          <p className="text-[13px] text-gray-500 mt-0.5">Manage your account and SprintSync AI preferences</p>
+        </div>
 
-            <div className="flex gap-6">
-              {/* Sidebar nav */}
-              <div className="w-52 flex-shrink-0">
-                <nav className="space-y-0.5">
-                  {sections.map(({ id, label, icon: Icon, description }) => (
-                    <button
-                      key={id}
-                      onClick={() => setActive(id)}
-                      className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-colors ${
-                        active === id
-                          ? 'bg-gray-100 text-gray-900'
-                          : 'text-gray-500 hover:bg-gray-50 hover:text-gray-700'
-                      }`}
-                    >
-                      <Icon className="w-4 h-4 flex-shrink-0" strokeWidth={1.75} />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-[13px] font-medium">{label}</p>
-                      </div>
-                      <ChevronRight className="w-3 h-3 flex-shrink-0 opacity-40" strokeWidth={2} />
-                    </button>
-                  ))}
-                </nav>
-              </div>
-
-              {/* Content */}
-              <div className="flex-1 min-w-0 bg-white border border-gray-200 rounded-xl p-6">
-                <ActiveSection />
-              </div>
-            </div>
+        <div className="flex gap-6">
+          {/* Sidebar nav */}
+          <div className="w-52 flex-shrink-0">
+            <nav className="space-y-0.5">
+              {sections.map(({ id, label, icon: Icon }) => (
+                <button
+                  key={id}
+                  onClick={() => setActive(id)}
+                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-colors ${
+                    active === id
+                      ? 'bg-gray-100 text-gray-900'
+                      : 'text-gray-500 hover:bg-gray-50 hover:text-gray-700'
+                  }`}
+                >
+                  <Icon className="w-4 h-4 flex-shrink-0" strokeWidth={1.75} />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[13px] font-medium">{label}</p>
+                  </div>
+                  <ChevronRight className="w-3 h-3 flex-shrink-0 opacity-40" strokeWidth={2} />
+                </button>
+              ))}
+            </nav>
           </div>
-        </main>
+
+          {/* Content */}
+          <div className="flex-1 min-w-0 bg-white border border-gray-200 rounded-xl p-6">
+            <ActiveSection user={user} />
+          </div>
+        </div>
       </div>
-    </div>
+    </AppShell>
   )
 }

@@ -67,6 +67,16 @@ export interface Task {
 
 export type SpecStatus = 'pending' | 'processing' | 'done' | 'error'
 
+// A task extracted by AI from a spec, not yet persisted — returned only by
+// specsApi.upload() for human review. Shape mirrors the backend's TaskCreate.
+export interface DraftTask {
+  title: string
+  description: string | null
+  status: TaskStatus
+  priority: TaskPriority
+  ai_tags: string[] | null
+}
+
 export interface ProjectSpec {
   id: string
   repository_id: string
@@ -79,6 +89,7 @@ export interface ProjectSpec {
   task_count: number
   error_message: string | null
   created_at: string
+  draft_tasks: DraftTask[]
 }
 
 export type SuggestionStatus = 'pending' | 'approved' | 'rejected'
@@ -108,6 +119,8 @@ export interface Suggestion {
   commit_message: string | null
 }
 
+// Matches the backend's CommitSummary — the trimmed shape embedded in
+// DashboardData.recent_commits.
 export interface Commit {
   id: string
   sha: string
@@ -119,6 +132,25 @@ export interface Commit {
   additions: number
   deletions: number
   html_url: string
+}
+
+export interface CommitFile {
+  filename: string
+  status: string
+  additions: number
+  deletions: number
+  patch: string | null
+}
+
+// Matches the backend's CommitOut — the full record returned by
+// GET /repositories/{id}/commits, including changed-files/diff data.
+export interface CommitDetail extends Commit {
+  repository_id: string
+  author_email: string
+  branch: string
+  changed_files: number
+  files_changed: CommitFile[] | null
+  analyzed: boolean
 }
 
 export interface ActivityItem {

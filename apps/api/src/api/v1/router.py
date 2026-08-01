@@ -9,6 +9,7 @@ from src.api.v1.suggestions import router as suggestions_router
 from src.api.v1.webhook import router as webhook_router
 from src.api.v1.dashboard import router as dashboard_router
 from src.api.v1.activity import router as activity_router
+from src.api.v1.commits import router as commits_router
 
 api_router = APIRouter()
 
@@ -20,3 +21,4 @@ api_router.include_router(specs_router)
 api_router.include_router(suggestions_router)
 api_router.include_router(webhook_router)
 api_router.include_router(activity_router)
+api_router.include_router(commits_router)

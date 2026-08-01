@@ -38,7 +38,11 @@ class ActivityLog(UUIDMixin, TimestampMixin, Base):
     )
     title: Mapped[str] = mapped_column(String(512), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    metadata: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    # NOTE: cannot be named `metadata` — that attribute name is reserved by
+    # SQLAlchemy's Declarative API (every Base subclass has `.metadata`, the
+    # MetaData registry) and raises InvalidRequestError at class-definition
+    # time if shadowed by a mapped column.
+    event_metadata: Mapped[Optional[dict]] = mapped_column("event_metadata", JSONB, nullable=True)
 
     # Relationships
     user: Mapped[Optional["User"]] = relationship("User", back_populates="activity_logs")  # noqa: F821

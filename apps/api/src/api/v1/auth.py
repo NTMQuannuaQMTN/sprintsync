@@ -1,5 +1,5 @@
 """GitHub OAuth authentication endpoints."""
-from fastapi import APIRouter, HTTPException, Depends, Query, status
+from fastapi import APIRouter, HTTPException, Depends, Query
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -8,7 +8,7 @@ from src.core.config import settings
 from src.core.database import get_db
 from src.core.security import create_access_token, get_current_user_id
 from src.models.user import User
-from src.schemas.user import UserOut, TokenResponse
+from src.schemas.user import UserOut
 from src.services.github import exchange_code_for_token, GitHubService
 
 router = APIRouter(prefix="/auth", tags=["auth"])

@@ -10,6 +10,8 @@ from src.models.activity_log import ActivityLog, ActivityType
 from src.models.integration import Integration, IntegrationType
 
 __all__ = [
+    "UUIDMixin",
+    "TimestampMixin",
     "User",
     "Repository",
     "ProjectSpecification",
