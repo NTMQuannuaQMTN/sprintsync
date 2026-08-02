@@ -14,23 +14,24 @@ class Settings(BaseSettings):
     ENV: str = "development"
     APP_NAME: str = "SprintSync AI"
 
-    # Database
+    # Database — points at the Supabase project's Postgres connection string
+    # (Supabase dashboard: Settings > Database > Connection string), using
+    # the service_role-equivalent DB user so our own queries bypass RLS
+    # (RLS protects the direct PostgREST/supabase-js access path, not a
+    # trusted backend — see the RLS policies in alembic/versions/001_*.py).
     DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/sprintsync"
 
-    # JWT
-    SECRET_KEY: str = "dev-secret-key-change-in-production"
-    ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 10080  # 7 days
-
-    # GitHub OAuth
-    GITHUB_CLIENT_ID: str = ""
-    GITHUB_CLIENT_SECRET: str = ""
-    GITHUB_REDIRECT_URI: str = "http://localhost:3000/api/auth/callback"
+    # GitHub Webhook — still handled by this app directly (Supabase Auth only
+    # owns the OAuth *login* flow, not GitHub webhook delivery).
     GITHUB_WEBHOOK_SECRET: str = ""
 
-    # Supabase Storage
+    # Supabase — GitHub OAuth itself is configured in the Supabase dashboard
+    # (Authentication > Providers > GitHub), not here. This app only needs to
+    # (a) verify the JWTs Supabase issues, and (b) optionally use the
+    # service-role key for Supabase Storage (spec uploads).
     SUPABASE_URL: str = ""
     SUPABASE_SERVICE_KEY: str = ""
+    SUPABASE_JWT_SECRET: str = ""
     SUPABASE_BUCKET: str = "sprintsync-specs"
 
     # CORS

@@ -1,7 +1,13 @@
 /**
  * Typed API client — wraps fetch with auth token injection.
  * All requests go through Next.js rewrites → FastAPI at /api/v1/*
+ *
+ * Authentication itself is owned by Supabase Auth (see lib/supabase.ts) —
+ * this module just attaches the current Supabase session's access token to
+ * every request as a Bearer token; the backend verifies it directly
+ * against Supabase's JWT secret (see apps/api/src/core/security.py).
  */
+import { supabase } from './supabase'
 import type {
   User,
   Repository,
@@ -16,21 +22,9 @@ import type {
 
 const BASE = '/api/v1'
 
-// ─── Token Management ─────────────────────────────────────────────────────────
-
-const TOKEN_KEY = 'sprintsync_token'
-
-export function getToken(): string | null {
-  if (typeof window === 'undefined') return null
-  return localStorage.getItem(TOKEN_KEY)
-}
-
-export function setToken(token: string): void {
-  localStorage.setItem(TOKEN_KEY, token)
-}
-
-export function clearToken(): void {
-  localStorage.removeItem(TOKEN_KEY)
+async function getAccessToken(): Promise<string | null> {
+  const { data } = await supabase.auth.getSession()
+  return data.session?.access_token ?? null
 }
 
 // ─── HTTP Helper ──────────────────────────────────────────────────────────────
@@ -39,7 +33,7 @@ async function request<T>(
   path: string,
   options: RequestInit = {},
 ): Promise<T> {
-  const token = getToken()
+  const token = await getAccessToken()
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(options.headers as Record<string, string> || {}),
@@ -51,7 +45,7 @@ async function request<T>(
   const res = await fetch(`${BASE}${path}`, { ...options, headers })
 
   if (res.status === 401) {
-    clearToken()
+    await supabase.auth.signOut()
     if (typeof window !== 'undefined') window.location.href = '/login'
     throw new Error('Unauthorized')
   }
@@ -69,7 +63,14 @@ async function request<T>(
 
 export const authApi = {
   getMe: () => request<User>('/auth/me'),
-  loginUrl: () => `${BASE}/auth/login`,
+  /** Call once right after supabase.auth.signInWithOAuth() resolves, with
+   * session.provider_token — the backend has no other way to get a GitHub
+   * API token, since Supabase doesn't persist/refresh it for us. */
+  syncProviderToken: (providerToken: string) =>
+    request<User>('/auth/sync', {
+      method: 'POST',
+      body: JSON.stringify({ provider_token: providerToken }),
+    }),
 }
 
 // ─── Dashboard ────────────────────────────────────────────────────────────────
@@ -120,7 +121,7 @@ export const tasksApi = {
 export const specsApi = {
   list: (repoId: string) => request<ProjectSpec[]>(`/repositories/${repoId}/specs`),
   upload: async (repoId: string, file: File): Promise<ProjectSpec> => {
-    const token = getToken()
+    const token = await getAccessToken()
     const formData = new FormData()
     formData.append('file', file)
     const res = await fetch(`${BASE}/repositories/${repoId}/specs`, {

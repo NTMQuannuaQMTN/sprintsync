@@ -1,44 +1,30 @@
 /**
- * Client-side auth utilities — token storage and user context.
+ * Client-side auth utilities. Session state itself lives in Supabase's
+ * client (see lib/supabase.ts) — this module just adapts it to the app's
+ * own User/profile shape via the backend's /auth/me.
  */
 'use client'
 
-import { getToken, setToken, clearToken, authApi } from './api'
+import { supabase } from './supabase'
+import { authApi } from './api'
 import type { User } from './types'
 
-export { getToken, setToken, clearToken }
-
-export function isAuthenticated(): boolean {
-  return !!getToken()
+export async function isAuthenticated(): Promise<boolean> {
+  const { data } = await supabase.auth.getSession()
+  return !!data.session
 }
 
 export async function fetchCurrentUser(): Promise<User | null> {
-  if (!isAuthenticated()) return null
+  const authed = await isAuthenticated()
+  if (!authed) return null
   try {
     return await authApi.getMe()
   } catch {
-    clearToken()
     return null
   }
 }
 
-export function signOut() {
-  clearToken()
+export async function signOut() {
+  await supabase.auth.signOut()
   window.location.href = '/login'
-}
-
-/** Called on /dashboard?token=xxx after GitHub OAuth callback */
-export function handleAuthCallback(): string | null {
-  if (typeof window === 'undefined') return null
-  const params = new URLSearchParams(window.location.search)
-  const token = params.get('token')
-  if (token) {
-    setToken(token)
-    // Clean URL
-    const url = new URL(window.location.href)
-    url.searchParams.delete('token')
-    window.history.replaceState({}, '', url.toString())
-    return token
-  }
-  return null
 }

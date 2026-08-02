@@ -9,7 +9,7 @@ from sqlalchemy import select, func
 from src.core.database import get_db
 from src.core.security import get_current_user_id
 from src.core.config import settings
-from src.models.user import User
+from src.models.profile import Profile
 from src.models.repository import Repository
 from src.models.task import Task, TaskStatus
 from src.models.suggestion import Suggestion, SuggestionStatus
@@ -20,12 +20,12 @@ from src.models.activity_log import ActivityLog, ActivityType
 router = APIRouter(prefix="/repositories", tags=["repositories"])
 
 
-async def _get_user(user_id: str, db: AsyncSession) -> User:
-    result = await db.execute(select(User).where(User.id == user_id))
-    user = result.scalar_one_or_none()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    return user
+async def _get_user(user_id: str, db: AsyncSession) -> Profile:
+    result = await db.execute(select(Profile).where(Profile.id == user_id))
+    profile = result.scalar_one_or_none()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    return profile
 
 
 @router.get("", response_model=List[RepositoryOut])

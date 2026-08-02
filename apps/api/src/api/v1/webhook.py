@@ -12,7 +12,7 @@ from src.models.commit import Commit
 from src.models.task import Task, TaskStatus
 from src.models.suggestion import Suggestion, SuggestionAction
 from src.models.activity_log import ActivityLog, ActivityType
-from src.models.user import User
+from src.models.profile import Profile
 from src.services.github import verify_webhook_signature, GitHubService
 from src.services.ai import ai_service
 
@@ -61,7 +61,7 @@ async def github_webhook(
     # exactly like the webhook-install and Supabase-upload code paths elsewhere
     # in this codebase.
     gh: Optional[GitHubService] = None
-    owner_result = await db.execute(select(User).where(User.id == repo.owner_id))
+    owner_result = await db.execute(select(Profile).where(Profile.id == repo.owner_id))
     owner = owner_result.scalar_one_or_none()
     if owner and owner.github_access_token:
         gh = GitHubService(owner.github_access_token)

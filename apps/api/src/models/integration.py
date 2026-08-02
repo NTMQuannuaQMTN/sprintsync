@@ -3,7 +3,7 @@ import uuid
 import enum
 from typing import Optional
 
-from sqlalchemy import String, Text, Boolean, ForeignKey, Enum as SAEnum, Index
+from sqlalchemy import String, Text, Boolean, Enum as SAEnum, Index
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -24,11 +24,12 @@ class IntegrationType(str, enum.Enum):
 class Integration(UUIDMixin, TimestampMixin, Base):
     __tablename__ = "integrations"
 
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
-    )
+    # References auth.users(id) — see models/profile.py for why there's no
+    # SQLAlchemy ForeignKey() wrapper on this column.
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
     integration_type: Mapped[IntegrationType] = mapped_column(
-        SAEnum(IntegrationType, name="integration_type"), nullable=False
+        SAEnum(IntegrationType, name="integration_type", values_callable=lambda obj: [e.value for e in obj]),
+        nullable=False,
     )
     workspace_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     workspace_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)

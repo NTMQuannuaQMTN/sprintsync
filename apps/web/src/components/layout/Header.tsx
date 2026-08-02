@@ -136,7 +136,7 @@ export default function Header({ title, actions, notifications = [] }: HeaderPro
               />
             ) : (
               <div className="w-7 h-7 rounded-full bg-blue-100 flex items-center justify-center text-xs font-bold text-blue-700">
-                {(user.name || user.github_username)[0].toUpperCase()}
+                {(user.name || user.github_username || '?')[0].toUpperCase()}
               </div>
             )}
           </Link>

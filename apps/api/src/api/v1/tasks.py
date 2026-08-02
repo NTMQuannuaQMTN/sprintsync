@@ -27,6 +27,22 @@ async def _assert_repo_owner(repo_id: uuid.UUID, user_id: str, db: AsyncSession)
     return repo
 
 
+async def _to_task_out(task: Task, db: AsyncSession) -> TaskOut:
+    """Build a TaskOut with subtasks explicitly (awaited) loaded.
+
+    Task.subtasks is a lazy relationship. Pydantic's model_validate() reads
+    it synchronously — even from inside an async function, that read is not
+    itself awaited, so it happens outside SQLAlchemy's async greenlet
+    context and raises MissingGreenlet if the relationship isn't already
+    loaded. db.refresh(..., attribute_names=[...]) performs an awaited,
+    in-place load of just that relationship, so by the time model_validate
+    runs, task.subtasks is already a plain, populated list — no lazy load
+    is triggered.
+    """
+    await db.refresh(task, attribute_names=["subtasks"])
+    return TaskOut.model_validate(task)
+
+
 @router.get("", response_model=List[TaskOut])
 async def list_tasks(
     repo_id: uuid.UUID,
@@ -44,18 +60,7 @@ async def list_tasks(
     result = await db.execute(q)
     tasks = result.scalars().all()
 
-    # Load subtasks for each root task
-    out = []
-    for task in tasks:
-        sub_result = await db.execute(
-            select(Task).where(Task.parent_id == task.id).order_by(Task.order_index)
-        )
-        subtasks = sub_result.scalars().all()
-        task_out = TaskOut.model_validate(task)
-        task_out.subtasks = [TaskOut.model_validate(s) for s in subtasks]
-        out.append(task_out)
-
-    return out
+    return [await _to_task_out(task, db) for task in tasks]
 
 
 @router.post("", response_model=TaskOut, status_code=status.HTTP_201_CREATED)
@@ -71,7 +76,7 @@ async def create_task(
     db.add(task)
     await db.commit()
     await db.refresh(task)
-    return TaskOut.model_validate(task)
+    return await _to_task_out(task, db)
 
 
 @router.post("/bulk", response_model=List[TaskOut], status_code=status.HTTP_201_CREATED)
@@ -122,7 +127,7 @@ async def bulk_create_tasks(
     for t in tasks:
         await db.refresh(t)
 
-    return [TaskOut.model_validate(t) for t in tasks]
+    return [await _to_task_out(t, db) for t in tasks]
 
 
 @router.get("/{task_id}", response_model=TaskOut)
@@ -139,7 +144,7 @@ async def get_task(
     task = result.scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    return TaskOut.model_validate(task)
+    return await _to_task_out(task, db)
 
 
 @router.patch("/{task_id}", response_model=TaskOut)
@@ -173,7 +178,7 @@ async def update_task(
 
     await db.commit()
     await db.refresh(task)
-    return TaskOut.model_validate(task)
+    return await _to_task_out(task, db)
 
 
 @router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)

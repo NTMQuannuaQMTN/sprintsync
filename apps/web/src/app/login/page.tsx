@@ -4,20 +4,26 @@ import { useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { GitBranch, Zap, Shield, ArrowRight } from 'lucide-react'
 import { isAuthenticated } from '@/lib/auth'
-import { authApi } from '@/lib/api'
+import { supabase } from '@/lib/supabase'
 import { GitHubIcon } from '@/components/ui/GitHubIcon'
 
 export default function LoginPage() {
   const router = useRouter()
 
   useEffect(() => {
-    if (isAuthenticated()) {
-      router.replace('/dashboard')
-    }
+    isAuthenticated().then((authed) => {
+      if (authed) router.replace('/dashboard')
+    })
   }, [router])
 
   const handleLogin = () => {
-    window.location.href = authApi.loginUrl()
+    supabase.auth.signInWithOAuth({
+      provider: 'github',
+      options: {
+        scopes: 'read:user user:email repo',
+        redirectTo: `${window.location.origin}/dashboard`,
+      },
+    })
   }
 
   return (

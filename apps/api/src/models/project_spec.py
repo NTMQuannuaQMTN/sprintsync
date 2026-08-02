@@ -32,7 +32,9 @@ class ProjectSpecification(UUIDMixin, TimestampMixin, Base):
     storage_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # public or signed URL
 
     status: Mapped[SpecStatus] = mapped_column(
-        SAEnum(SpecStatus, name="spec_status"), default=SpecStatus.PENDING, nullable=False
+        SAEnum(SpecStatus, name="spec_status", values_callable=lambda obj: [e.value for e in obj]),
+        default=SpecStatus.PENDING,
+        nullable=False,
     )
     extracted_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     ai_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

@@ -3,39 +3,55 @@
 Living document for the autopilot loop defined in [`autopilot.md`](./autopilot.md).
 
 - First inspection: 2026-08-01 (read-only audit, no code changed).
-- Second pass: 2026-08-02 (Task 2 implementation pass — this revision).
+- Second pass: 2026-08-02 morning (Task 2 implementation pass — new pages,
+  backend features, static verification).
+- Third pass: 2026-08-02 afternoon (live-execution pass — fetched a portable
+  Python 3.11 and a local Postgres into the session, then actually ran the
+  app, ran the migration for real, and exercised the full V1 loop over HTTP
+  against a live database).
+- Fourth pass: 2026-08-02 evening (architecture pivot — identity and the
+  database moved to Supabase, at the user's request, since their real
+  GitHub OAuth callback is `https://sodpgvxgrclvjawylrli.supabase.co/auth/v1/callback`.
+  GitHub OAuth is now entirely Supabase-managed; this app verifies
+  Supabase-issued JWTs instead of minting its own; every table has RLS
+  enabled with ownership-scoped policies. See the "Supabase migration"
+  section below for full evidence.).
 
 Every row below was produced by reading the actual implementation and, where
-noted, running it (tests, linter, type checker, production build) — not by
-assumption. Re-verify before trusting a row if significant time has passed or
-code has changed since the "Evidence" was recorded.
+noted, running it (tests, linter, type checker, production build, or a live
+HTTP request against a running server) — not by assumption. Re-verify before
+trusting a row if significant time has passed or code has changed since the
+"Evidence" was recorded.
 
 Legend: `NOT_STARTED` `IN_PROGRESS` `PARTIAL` `COMPLETED` `BLOCKED`
 
 ---
 
 ### AUTH-001 — GitHub OAuth login page exists
-- **Status:** COMPLETED (unchanged)
-- **Evidence:** `apps/web/src/app/login/page.tsx` renders a "Continue with GitHub" CTA that redirects to `authApi.loginUrl()`.
-- **Verification:** `npx tsc --noEmit` clean; `npm run build` includes `/login` in the static route list.
+- **Status:** COMPLETED (re-architected — Supabase-managed now, not custom)
+- **Evidence:** `apps/web/src/app/login/page.tsx` calls `supabase.auth.signInWithOAuth({ provider: 'github', options: { scopes: 'read:user user:email repo', redirectTo: '<origin>/dashboard' } })` — GitHub OAuth itself (client id/secret, the authorize/token exchange, callback handling) is entirely owned by Supabase Auth, configured in the Supabase dashboard (Authentication > Providers > GitHub), not in this app. This app's own `/api/v1/auth/login` and `/auth/callback` endpoints were **deleted** — they no longer exist or are needed.
+- **Verification:** `npx tsc --noEmit` clean; `npm run build` includes `/login`. Live end-to-end OAuth exchange against the real GitHub provider is untested — that requires a real Supabase project with GitHub configured and a real anon key (see ENV-001).
 
 ### AUTH-002 — OAuth callback is implemented
-- **Status:** COMPLETED (unchanged)
-- **Evidence:** `apps/api/src/api/v1/auth.py` — `/auth/login` builds the GitHub authorize URL, `/auth/callback` exchanges the code, upserts `User`, issues a JWT.
-- **Verification:** Manual trace + `ruff check` clean. Live OAuth exchange still untested (no `GITHUB_CLIENT_ID`/`SECRET` in this environment — see ENV-001).
+- **Status:** COMPLETED (re-architected)
+- **Evidence:** No callback endpoint exists in this app anymore — Supabase's own hosted callback (`https://<project>.supabase.co/auth/v1/callback`) handles the GitHub code exchange, then redirects to `redirectTo` with a session Supabase's client library picks up automatically. This app's role shrank to: (1) verify the resulting Supabase JWT (`core/security.py::decode_supabase_token`), (2) accept the GitHub `provider_token` once via `POST /auth/sync` so it can call the GitHub API later. Both live-tested: crafted a real Supabase-shaped JWT (HS256, `sub`/`aud`/`role` claims matching what Supabase issues) signed with a test `SUPABASE_JWT_SECRET`, hit `/auth/me` (200, correct profile) and `/auth/sync` (200, provider token stored) against a live Postgres with a stubbed `auth.users` row.
+- **Notes:** The actual GitHub<->Supabase OAuth handshake itself is still untested — needs a real Supabase project with GitHub configured (see ENV-001).
 
 ### AUTH-003 — Authenticated user is persisted
-- **Status:** COMPLETED (unchanged)
+- **Status:** COMPLETED (re-architected — auth.users + profiles, not a custom users table)
+- **Evidence:** Identity now lives in Supabase's own `auth.users` (this app never creates or migrates that table). This app's `public.profiles` (`apps/api/src/models/profile.py`) is a 1:1 extension keyed by the same id, auto-populated by a Postgres trigger (`handle_new_user()`, defined in the migration) on every `auth.users` insert. Live-tested: inserted a fake `auth.users` row with GitHub-shaped `raw_user_meta_data`, confirmed the trigger created a matching `profiles` row with the right `github_username`/`avatar_url`/`email` extracted from it.
 
 ### AUTH-004 — Protected routes reject unauthenticated users
-- **Status:** PARTIAL (unchanged)
-- **Notes:** Backend `get_current_user_id` dependency is solid. Frontend still gates via client-side `useEffect` in `AppShell`/`AuthProvider`, not middleware. Not addressed this pass — flagged as a product decision (add `middleware.ts`?), not a bug.
+- **Status:** PARTIAL (backend re-verified against the new Supabase-JWT scheme; frontend gap unchanged)
+- **Evidence:** Live-tested against the new `decode_supabase_token`: no `Authorization` header → `401`; garbage/invalid-signature token → `401`; a correctly-signed Supabase-shaped JWT → `200` with the right profile.
+- **Notes:** Frontend still gates via client-side `useEffect` in `AppShell`/`AuthProvider`, not middleware — unchanged from before, still a product decision not a bug.
 
 ### REPO-001 — Repository list can be retrieved from GitHub
-- **Status:** COMPLETED (unchanged)
+- **Status:** COMPLETED (unchanged — still untested against real GitHub, no credentials available)
 
 ### REPO-002 — Repository can be connected to the application
-- **Status:** COMPLETED (unchanged)
+- **Status:** COMPLETED (re-verified after the Supabase pivot)
+- **Evidence:** Seeded a real `Repository` row with `owner_id` set to a real `auth.users`-shaped id (bypassing the GitHub-API-dependent connect step, which needs real credentials) and confirmed `GET /api/v1/repositories` returns it correctly enriched with `task_count`/`done_count`/`pending_suggestions`.
 
 ### REPO-003 — Repository details page displays repository metadata
 - **Status:** COMPLETED (upgraded from PARTIAL)
@@ -48,8 +64,9 @@ Legend: `NOT_STARTED` `IN_PROGRESS` `PARTIAL` `COMPLETED` `BLOCKED`
 - **Evidence:** `apps/api/src/api/v1/specs.py::upload_spec`; now also has a working frontend UI at `apps/web/src/app/repositories/[id]/upload/page.tsx`.
 
 ### SPEC-002 — PDF/DOCX content can be extracted
-- **Status:** PARTIAL (unchanged this pass)
-- **Notes:** Still ungraded to COMPLETED — real PyPDF2/python-docx logic exists (`services/document_parser.py`) but has never been executed against a real file in this sandbox (no Python 3.11 interpreter available — see ENV-001). Add a fixture-based pytest test when a compatible Python is available.
+- **Status:** PARTIAL (upgraded from "never executed" — DOCX side now proven, PDF side still not)
+- **Evidence:** `apps/api/tests/test_document_parser.py` builds a real `.docx` in memory with `python-docx` and round-trips it through `extract_text` — including a full chain into `ai_service.extract_tasks_from_text` (real DOCX bytes → real extracted text → real AI-drafted tasks). 3 new tests, all passing.
+- **Notes:** Still PARTIAL, not COMPLETED — the PDF path (`PyPDF2`) has no equivalent live test. Generating a real PDF fixture would need a new dependency (`reportlab`/`fpdf`) purely for testing, which wasn't added to keep dependencies minimal; a hand-rolled minimal PDF binary was considered and rejected as too fragile to be worth it. PDF extraction remains verified by manual code trace only.
 
 ### SPEC-003 — AI can convert specification requirements into structured tasks
 - **Status:** COMPLETED (upgraded from PARTIAL)
@@ -67,16 +84,16 @@ Legend: `NOT_STARTED` `IN_PROGRESS` `PARTIAL` `COMPLETED` `BLOCKED`
 - **Notes:** No DB schema change was needed — this was a response-shape and control-flow change, not a migration.
 
 ### TASK-001 — Tasks are persisted in PostgreSQL
-- **Status:** PARTIAL (unchanged)
-- **Notes:** Schema/migration correct on inspection (and the `metadata` bug found in ACT-002 below proves the import-time check is real, not rubber-stamped). Still not run against a live Postgres in this sandbox — genuinely BLOCKED by environment, tracked under ENV-001.
+- **Status:** COMPLETED (upgraded from PARTIAL — fully live-verified)
+- **Evidence:** `alembic upgrade head` run for real against a local Postgres 18 — created all 8 tables + `alembic_version`, confirmed via `information_schema.columns`. `POST /repositories/{id}/tasks` created a real row; `GET` returned it with correct `status`/`priority` enum values; a subsequent webhook-triggered AI suggestion approval flipped its `status` to `done` in the database (confirmed via a follow-up `GET`).
+- **Bugs found and fixed getting here:** BUG-002 (duplicate `CREATE TYPE`), BUG-003 (enum values bound by name not value), BUG-004 (`TaskOut.subtasks` MissingGreenlet) — see the Bugs Found section below. None of these were visible from reading the code; all three only surfaced when the migration/endpoints actually ran.
 
 ### WEBHOOK-001 — GitHub webhook endpoint receives push events
-- **Status:** COMPLETED (unchanged)
-- **Evidence:** Now also covered by `apps/api/tests/test_webhook_signature.py` (5 tests: valid signature, tampered payload, wrong secret, missing signature, dev-mode bypass when no secret configured).
-- **Verification:** `.venv/bin/pytest -q` → passing.
+- **Status:** COMPLETED (upgraded — now proven live end-to-end, not just unit-tested)
+- **Evidence:** `apps/api/tests/test_webhook_signature.py` (5 tests: valid signature, tampered payload, wrong secret, missing signature, dev-mode bypass). Also live-tested: `POST /api/v1/webhook/github` with a real crafted push payload against a seeded repo returned `{"status":"ok","commits_processed":1,"suggestions_created":3}` — a real `Commit` row was created and real `Suggestion` rows were generated by the actual AI heuristic (matched on real keyword overlap with the 3 seeded task titles).
 
 ### WEBHOOK-002 — Commit metadata is stored
-- **Status:** COMPLETED (unchanged)
+- **Status:** COMPLETED (upgraded — confirmed via a live webhook POST + DB read, not just code trace)
 
 ### WEBHOOK-003 — Changed files/diff can be retrieved
 - **Status:** COMPLETED (upgraded from PARTIAL)
@@ -88,28 +105,127 @@ Legend: `NOT_STARTED` `IN_PROGRESS` `PARTIAL` `COMPLETED` `BLOCKED`
 - **Notes:** No UI page consumes `commitsApi` yet (only the data layer + API were built this pass) — a "commits" tab/section on the repo detail page is a reasonable next step, not done here to keep scope bounded.
 
 ### SUGG-001 — AI can determine which tasks are affected
-- **Status:** COMPLETED (upgraded from COMPLETED-by-inspection to COMPLETED-by-test)
-- **Evidence:** `apps/api/tests/test_ai_service.py` — `test_analyze_commit_flags_completion_keyword_as_done`, `test_analyze_commit_skips_already_done_tasks`, `test_analyze_commit_returns_nothing_for_unrelated_commit`, all passing.
+- **Status:** COMPLETED (upgraded — proven live, not just unit-tested)
+- **Evidence:** `apps/api/tests/test_ai_service.py` (unit tests, passing) plus a live webhook POST that produced 3 real `Suggestion` rows, each correctly matched to the seeded task by keyword overlap with the commit message.
 
 ### SUGG-002 — AI generates evidence-backed completion suggestions
-- **Status:** COMPLETED (unchanged, now test-covered — see SUGG-001 evidence)
+- **Status:** COMPLETED (upgraded — live-verified)
+- **Evidence:** `GET /repositories/{id}/suggestions?status=pending` returned real rows with populated `evidence.matching_keywords`/`evidence.reasoning` and a human-readable `explanation`, generated by the real heuristic, not hardcoded.
 
 ### SUGG-003 — Suggestions require human approval
-- **Status:** COMPLETED (unchanged)
-- **Evidence:** Also now has a working review UI: `apps/web/src/app/repositories/[id]/suggestions/page.tsx` (pending/approved/rejected tabs, approve/reject with optional note, confidence bar, evidence display).
+- **Status:** COMPLETED (upgraded — live-verified)
+- **Evidence:** Working review UI (`apps/web/src/app/repositories/[id]/suggestions/page.tsx`). Live-tested: newly created suggestions have `status: "pending"`; the task's own status is untouched until an explicit `POST .../approve` call.
 
 ### SUGG-004 — Approved suggestions update task status
-- **Status:** COMPLETED (unchanged)
+- **Status:** COMPLETED (upgraded — live-verified)
+- **Evidence:** `POST /repositories/{id}/suggestions/{sug_id}/approve` (with a `note`) returned `status: "approved"`; a follow-up `GET` on the associated task showed `status` flipped from `"todo"` to `"done"`, `updated_at` bumped accordingly.
 
 ### ACT-001 — Activity history records the action
-- **Status:** COMPLETED (unchanged)
-- **Evidence:** Now also has a working UI: `apps/web/src/app/repositories/[id]/activity/page.tsx`, event-type-to-icon mapping, 30s poll.
+- **Status:** COMPLETED (upgraded — live-verified)
+- **Evidence:** Working UI (`apps/web/src/app/repositories/[id]/activity/page.tsx`). Live-tested: after the seed → webhook → approve sequence above, `GET /repositories/{id}/activity` returned, in order, `suggestion_approved`, `commit_received`, `suggestion_created` entries with correct titles — the audit trail is real, not decorative.
 
-### ACT-002 — `ActivityLog.metadata` reserved-attribute crash (found this pass, not in original 20)
-- **Status:** COMPLETED (bug found and fixed)
-- **Evidence:** `apps/api/src/models/activity_log.py` declared a column literally named `metadata`, which collides with SQLAlchemy Declarative's reserved `Base.metadata` attribute and raises `InvalidRequestError` **at class-definition time** — meaning the backend could never have started, on any Python version, regardless of DB/credentials. This was only found by actually attempting `from src.main import app` (per autopilot's "run it, don't just read it" rule). Renamed the model attribute (and the matching, never-yet-applied Alembic column) to `event_metadata`.
+---
+
+## Supabase migration (2026-08-02 evening — architecture pivot)
+
+At the user's request, identity and the database moved to Supabase:
+
+- **SUPA-001 — GitHub OAuth is Supabase-managed.** No client id/secret, no
+  authorize/token-exchange code, no callback endpoint lives in this app
+  anymore — Supabase Auth owns all of it. This app only verifies the
+  resulting JWT and captures the GitHub provider token once via
+  `POST /auth/sync`. See AUTH-001/002 above for evidence.
+- **SUPA-002 — Schema rewritten around `auth.users`.** `apps/api/src/models/user.py`
+  (a custom `users` table) is gone, replaced by `apps/api/src/models/profile.py`
+  (`public.profiles`, 1:1 with `auth.users`, auto-populated by a DB trigger).
+  Every `owner_id`/`user_id`/`reviewed_by` column across `repositories`,
+  `suggestions`, `activity_logs`, `integrations` now references
+  `auth.users(id)` instead of a table this app owns.
+- **SUPA-003 — RLS enabled and policy-verified on every table.** `profiles`,
+  `repositories`, `project_specifications`, `tasks`, `commits`,
+  `suggestions`, `activity_logs`, `integrations` all have
+  `ENABLE ROW LEVEL SECURITY` plus ownership-scoped policies (direct
+  `owner_id = auth.uid()` for `repositories`; via-repository-ownership
+  subqueries for the child tables; `user_id = auth.uid()` for
+  `profiles`/`integrations`). **Genuinely tested, not just declared:**
+  created a non-superuser Postgres role, set its session to one seeded
+  user's `auth.uid()`, and confirmed it could see its own repository but
+  **not** a second seeded user's repository — and the same for `profiles`.
+  This app's own backend connects as a trusted role that bypasses RLS by
+  design (RLS governs the PostgREST/supabase-js access path, not a trusted
+  server) — these policies protect the tables if ever queried directly via
+  supabase-js with an end user's session.
+- **SUPA-004 — Frontend now uses supabase-js for the entire auth flow.**
+  `apps/web/src/lib/supabase.ts` (new), `lib/api.ts`/`lib/auth.ts`/
+  `AuthProvider.tsx` rewritten to read the Bearer token from the current
+  Supabase session instead of a custom `localStorage` token; `login/page.tsx`
+  calls `supabase.auth.signInWithOAuth` directly.
+
+**What's still needed from the user, and why I didn't fabricate it:**
+`SUPABASE_JWT_SECRET`, `SUPABASE_URL`, `SUPABASE_SERVICE_KEY` (backend,
+`apps/api/.env`) and `NEXT_PUBLIC_SUPABASE_URL`/`NEXT_PUBLIC_SUPABASE_ANON_KEY`
+(frontend, `apps/web/.env.local`) are real credentials from your Supabase
+project's dashboard (Settings > API) — I only had the OAuth callback URL,
+which reveals the project ref but not any keys. `apps/web/.env.local` is
+pre-filled with the real project URL and a placeholder anon key; swap the
+placeholder for the real one and the frontend auth flow will work against
+your actual project. Everything else (schema, RLS, trigger, JWT
+verification logic) was verified against a locally-stubbed `auth` schema
+that mimics Supabase's shape closely enough to prove the logic is correct
+— it is not a substitute for testing against your real project once real
+credentials are in place.
+
+---
+
+## Bugs found this session (via live execution, not code reading)
+
+Eight real, previously-undiscovered bugs — every one of them would have hit
+a real deployment, and none were visible from reading the code alone. This
+is the core argument for autopilot's "run it, don't just read it" rule.
+
+### BUG-001 — `ActivityLog.metadata` reserved-attribute crash
+- **Status:** FIXED
+- **Evidence:** `apps/api/src/models/activity_log.py` declared a column literally named `metadata`, which collides with SQLAlchemy Declarative's reserved `Base.metadata` attribute and raises `InvalidRequestError` **at class-definition time** — the backend could never have started, on any Python version, regardless of DB/credentials. Found by attempting `from src.main import app`.
+- **Fix:** Renamed to `event_metadata` in the model and the matching (never-yet-applied) Alembic column.
 - **Files:** `apps/api/src/models/activity_log.py`, `apps/api/alembic/versions/001_initial_schema.py`.
-- **Verification:** Re-ran `from src.main import app` — got past model loading (next failure was Python-version-related, see ENV-001).
+
+### BUG-002 — Missing `greenlet` dependency
+- **Status:** FIXED
+- **Evidence:** Once the app could import (Python 3.11), every request that used `Depends(get_db)` 500'd during dependency teardown — `session.close()` needs `greenlet` for SQLAlchemy's async engine, and it wasn't in `requirements.txt`. This means literally every endpoint in the app, including ones just returning a 401, would 500 in a real deployment. Found by starting a real `uvicorn` server and hitting `GET /api/v1/repositories`.
+- **Fix:** Added `greenlet==3.5.4` to `requirements.txt`.
+
+### BUG-003 — Alembic migration created every Postgres ENUM type twice
+- **Status:** FIXED
+- **Evidence:** `apps/api/alembic/versions/001_initial_schema.py` both pre-declared every enum type in an upfront block (`op.execute("CREATE TYPE ...")`) AND let each `sa.Enum(...)` column definition auto-create the same type again. `alembic upgrade head` against a real, fresh Postgres failed immediately: `DuplicateObjectError: type "spec_status" already exists`. This means the migration had never been run successfully, ever, against a real database.
+- **Fix:** Changed every column's `sa.Enum(...)` to `postgresql.ENUM(..., create_type=False)` so it reuses the upfront-created type instead of recreating it.
+
+### BUG-004 — Enum columns bound by Python enum *name* instead of *value*
+- **Status:** FIXED
+- **Evidence:** After BUG-003 was fixed, `alembic upgrade head` succeeded, but `POST /repositories/{id}/tasks` then failed with `InvalidTextRepresentationError: invalid input value for enum task_status: "TODO"`. SQLAlchemy's `Enum(PyEnum, name=...)` binds by the Python enum member's `.name` ("TODO") by default, not its `.value` ("todo"), unless told otherwise — and the Postgres enum type (and the app's own `TaskStatus.value`, used everywhere else) is lowercase. This bug meant **every single write** to any of the 5 enum-typed columns across the whole app (`Task.status`/`priority`, `ProjectSpecification.status`, `Suggestion.status`/`action`, `ActivityLog.event_type`, `Integration.integration_type`) would have failed against a real Postgres.
+- **Fix:** Added `values_callable=lambda obj: [e.value for e in obj]` to all 6 `SAEnum(...)` column definitions across `models/task.py`, `models/suggestion.py`, `models/project_spec.py`, `models/activity_log.py`, `models/integration.py`.
+
+### BUG-005 — `TaskOut.subtasks` triggered a lazy-load crash outside the async context
+- **Status:** FIXED
+- **Evidence:** After BUG-004 was fixed, task creation still 500'd: `pydantic_core.ValidationError: ... MissingGreenlet: greenlet_spawn has not been called`. `TaskOut.model_validate(task)` reads `task.subtasks` (a lazy SQLAlchemy relationship) synchronously — even from inside an `async def`, that specific read isn't itself awaited, so it falls outside SQLAlchemy's async greenlet context. This hit every task create/read/update across 4 endpoints in `tasks.py` plus one in `specs.py`.
+- **Fix:** Added a shared `_to_task_out(task, db)` helper in `apps/api/src/api/v1/tasks.py` that does `await db.refresh(task, attribute_names=["subtasks"])` — a properly awaited, in-place load — before calling `model_validate`. Replaced all 5 call sites (`list_tasks`, `create_task`, `bulk_create_tasks`, `get_task`, `update_task` in `tasks.py`; `get_spec_tasks` in `specs.py`, which imports the helper) with it.
+
+### BUG-006 — User's own dev server was dead on port 8000 for 1h17m
+- **Status:** FIXED (operational, not a code bug)
+- **Evidence:** The user reported "auth/login gives Internal Server Error." Investigation found their `npm run dev` (running since before this session's fixes) had launched `uvicorn` against a stale Python-3.9-based `.venv` — which crashes immediately on `src/core/security.py`'s `str | None` syntax. The crashed process left an unresponsive reload-supervisor sitting on nothing, so every proxied `/api/*` request from the Next.js dev server 500'd for over an hour with no useful log a user would think to check.
+- **Fix:** Killed the stale process tree; started a fresh `uvicorn` using the corrected `.venv` (Python 3.11) and a new `apps/api/.env` pointing at a working local Postgres. Confirmed via `curl http://localhost:3000/api/v1/auth/login` → `307` (correct redirect, was `500`).
+- **Lesson for future autopilot passes:** a proxy-level 500 on `/api/*` with no application-level traceback usually means nothing is listening upstream — check `lsof -iTCP -sTCP:LISTEN` before assuming it's a code bug.
+
+### BUG-007 — `ForeignKey("auth.users.id")` crashed the ORM on any write, not just DDL
+- **Status:** FIXED
+- **Evidence:** After moving `owner_id`/`user_id`/`reviewed_by` columns to reference `auth.users(id)` (Supabase's table, not one this app maps as a model), `alembic upgrade head` worked fine (DDL generation just needs a string), but the **first ORM write** touching any of those tables failed: `sqlalchemy.exc.NoReferencedTableError: Foreign key associated with column 'profiles.id' could not find table 'auth.users'`. SQLAlchemy's ORM flush machinery resolves FK targets against its own `MetaData` registry to compute insert/update ordering — a bare string reference works for raw DDL (`op.create_table`) but not for `mapped_column(..., ForeignKey(...))`, since `auth.users` was never mapped.
+- **Fix:** Removed the SQLAlchemy `ForeignKey()` wrapper from all 5 affected columns (`profiles.id`, `repositories.owner_id`, `suggestions.reviewed_by`, `activity_logs.user_id`, `integrations.user_id`) — they're now plain `UUID` columns at the ORM level. The actual FK constraint still exists at the database level (defined via raw DDL in the Alembic migration, which doesn't go through ORM mapper resolution) — Postgres still enforces referential integrity and `ON DELETE CASCADE`/`SET NULL`; SQLAlchemy's ORM just doesn't need to know about it, and no code in this app relied on that relationship being ORM-navigable (confirmed by grepping for `.owner`/`.user` attribute access before removing — there was none).
+- **Files:** `apps/api/src/models/profile.py`, `repository.py`, `suggestion.py`, `activity_log.py`, `integration.py`.
+
+### BUG-008 — Frontend's Supabase client threw at module-load, breaking `next build`
+- **Status:** FIXED
+- **Evidence:** `lib/supabase.ts` originally threw if `NEXT_PUBLIC_SUPABASE_URL`/`ANON_KEY` were missing. That module is imported (transitively) by several client components, which Next.js prerenders at **build time** even though they're `'use client'` — so `npm run build` failed outright (`Error occurred prerendering page "/settings"`) in this sandbox, which has no real Supabase project configured yet. This would hit any CI/deploy pipeline that builds before secrets are injected, too.
+- **Fix:** Changed the throw to a `console.warn` plus a placeholder URL/key fallback, so the build always succeeds; a real auth attempt against a placeholder project fails at the point of the actual network call (clear error), not at page-generation time.
+- **Files:** `apps/web/src/lib/supabase.ts`.
 
 ---
 
@@ -134,26 +250,42 @@ Legend: `NOT_STARTED` `IN_PROGRESS` `PARTIAL` `COMPLETED` `BLOCKED`
 - **Evidence:** `npm run build` (from `apps/web`) completes successfully — 11 routes generated (`/`, `/_not-found`, `/dashboard`, `/login`, `/repositories`, `/repositories/[id]`, `/repositories/[id]/activity`, `/repositories/[id]/suggestions`, `/repositories/[id]/tasks`, `/repositories/[id]/upload`, `/settings`).
 - **Notes:** Also had to replace `lucide-react`'s `Github` icon (deprecated/removed as a brand icon in newer lucide-react major versions) with the project's existing hand-rolled `components/ui/GitHubIcon.tsx` SVG component, in `login/page.tsx` and the landing `page.tsx`.
 
+### INFRA-005 — `.env.example` files are actually tracked in git
+- **Status:** COMPLETED (bug found and fixed)
+- **Evidence:** The root `.gitignore` had a literal `apps/api/.env.example` entry — `git ls-files` confirmed it had **never been committed**, despite being a legitimate, secret-free template file meant to ship with the repo. Anyone cloning fresh would have zero indication of what environment variables the backend needs. Found while adding the equivalent file for the frontend and noticing the pattern.
+- **Fix:** Removed the `apps/api/.env.example` line from `.gitignore`; added proper `.env.local`/`.env*.local` patterns (Next.js convention) so real local secrets stay ignored without also hiding the example templates. Added `apps/web/.env.example` (previously didn't exist at all).
+- **Files:** `.gitignore`, `apps/web/.env.example` (new).
+- **Notes:** The updated `.gitignore` and new/restored example files are not yet committed — that's a user action (`git add` + commit), not something done automatically per this project's git safety rules.
+
 ### TEST-001 — Automated test coverage exists
-- **Status:** PARTIAL (upgraded from NOT_STARTED)
-- **Evidence:** `apps/api/tests/test_webhook_signature.py` (5 tests) + `apps/api/tests/test_ai_service.py` (6 tests) — **11/11 passing**, covering webhook signature verification and the AI heuristic service end to end with real (non-mocked) logic.
-- **Notes:** Still PARTIAL, not COMPLETED — no frontend tests exist, and no integration tests that exercise a route through the DB (blocked by no reachable Postgres in this sandbox — see ENV-001). Route-level tests (e.g. via `httpx.AsyncClient` + an in-memory/test DB) are the natural next addition once a Postgres instance is available.
+- **Status:** PARTIAL (upgraded — 14 automated tests, plus a full live end-to-end run)
+- **Evidence:** `apps/api/tests/` — `test_webhook_signature.py` (5), `test_ai_service.py` (6), `test_document_parser.py` (3) — **14/14 passing**. Beyond that, a full live run (seed → webhook → suggestions → approve → activity, see BUG-001 through BUG-005 above) exercised the entire V1 loop against a real Postgres over real HTTP.
+- **Notes:** Still PARTIAL, not COMPLETED — no frontend tests exist, and the 14 pytest tests are unit-level (no DB); the DB-level correctness was proven via manual live HTTP calls this pass, not via an automated integration test suite. Adding `httpx.AsyncClient`-based route tests against a test DB (now that Postgres access is understood to work) is the natural next step.
 
 ### ENV-001 — Backend can actually start in this environment
-- **Status:** BLOCKED (unchanged, still genuine)
-- **Evidence:** A Python virtualenv was created and `requirements.txt` installed successfully (`apps/api/.venv`), and `ruff`/`mypy`/`pytest` all run cleanly against it. However, **this sandbox's only Python is 3.9.6**, while the project targets `>=3.11` and uses PEP 604 union syntax (`str | None`) in `src/core/security.py` that 3.9 cannot parse at runtime — confirmed by `from src.main import app` failing with `TypeError: unsupported operand type(s) for |: 'type' and '_SpecialForm'` (a Python-version issue, not a code bug — the syntax is correct for the project's stated target). No `python3.11`/`python3.12`, `pyenv`, or `brew` available in this sandbox to install one. Also still missing: a reachable Postgres instance, and real `GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET`/`GITHUB_WEBHOOK_SECRET` (only `.env.example` exists).
-- **What would unblock it:** Run `apps/api`'s new `npm run setup` on a machine with Python 3.11+, point `DATABASE_URL` at a real Postgres and run `alembic upgrade head`, and register a GitHub OAuth App + webhook secret.
+- **Status:** PARTIAL (upgraded from BLOCKED — unblocked for this session, not durably; still no real Supabase project wired in)
+- **Evidence:** Fetched a portable Python 3.11.15 (`astral-sh/python-build-standalone`) and a portable Postgres 18 (`io.zonky.test:embedded-postgres-binaries`, the same artifact Java's embedded-postgres uses) into the session scratchpad — no `brew`/`pyenv`/Docker were available, so package-manager installation wasn't an option. Rebuilt `apps/api/.venv` against the portable Python; started Postgres on `127.0.0.1:5433` with a **stubbed `auth` schema** (a minimal `auth.users` table + `auth.uid()` function mimicking Supabase's shape, since real Supabase auth internals aren't something you can install locally); ran `alembic upgrade head` for real; ran `uvicorn` for real; exercised the full API over real HTTP, including the new Supabase-JWT auth flow and RLS policies (see BUG-001 through BUG-008 above).
+- **Notes:** Still not COMPLETED, for two independent reasons: (1) the portable Python/Postgres are session-local, under `/private/tmp/.../scratchpad/`, and won't exist in a future session or on the user's own machine; (2) this pass tests against a **stub** of Supabase's auth schema, not the real thing — the actual GitHub OAuth handshake, the real `auth.users` trigger behavior, and RLS under Supabase's real `authenticated`/`anon` roles are still unverified against the user's actual project.
+- **What would make it durable and complete:** install Python 3.11+ (`pyenv`/`brew`) on the real dev machine; get the real `SUPABASE_JWT_SECRET`/`SUPABASE_SERVICE_KEY`/`DATABASE_URL` from the Supabase dashboard into `apps/api/.env`; get the real `NEXT_PUBLIC_SUPABASE_ANON_KEY` into `apps/web/.env.local`; run `alembic upgrade head` against the real project (creates `profiles` + all tables + RLS policies + the `auth.users` trigger for real); configure GitHub as an OAuth provider in the Supabase dashboard if not already done.
 
 ---
 
-## Summary (2026-08-02 snapshot, after Task 2 implementation pass)
+## Summary (2026-08-02 evening snapshot, after the Supabase migration pass)
 
-- COMPLETED: 20
-- PARTIAL: 4 (AUTH-004, SPEC-002, TASK-001, TEST-001)
+- COMPLETED: 23 (4 re-verified against the new Supabase-based auth: AUTH-001/002/003, REPO-002)
+- PARTIAL: 3 (AUTH-004, SPEC-002, TEST-001) + ENV-001 (environment — session-local fix, and a stubbed auth schema, not the real Supabase project)
 - NOT_STARTED: 0
-- BLOCKED: 1 (ENV-001 — environment/credentials, not fixable from inside this sandbox)
+- BLOCKED: 0
 
-Everything marked COMPLETED this pass has either a passing automated test
-(`pytest` 11/11, `tsc --noEmit` clean, `npm run build` succeeding, `ruff check`
-clean) or a full manual trace recorded above — nothing was promoted on the
-strength of "it should work."
+Everything marked COMPLETED this pass has either a live HTTP request against
+a running server backed by a real Postgres (including, this pass, a real
+Supabase-shaped JWT and genuinely-tested RLS row isolation), a passing
+automated test (`pytest` 14/14), `tsc --noEmit` clean, `npm run build`
+succeeding, or `ruff check` clean — and, for the eight real bugs found so
+far (BUG-001 through BUG-008), a before/after repro showing the exact
+failure and the fix that resolved it. Nothing was promoted on the strength
+of "it should work." The one honest caveat: this pass's Supabase testing
+used a local stand-in for Supabase's auth schema, not the user's real
+project — genuinely close enough to validate the SQL/trigger/RLS logic,
+but not a substitute for one real end-to-end run against production
+Supabase once real credentials are in place.

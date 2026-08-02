@@ -1,7 +1,20 @@
-"""Initial schema — all core tables.
+"""Initial schema — all core tables, Supabase Auth + RLS.
+
+Identity is owned by Supabase Auth (auth.users), not by this app. Every
+owner/user foreign key points at auth.users(id). public.profiles is a 1:1
+extension table (id == auth.users.id) holding GitHub-specific display data
+and the GitHub provider token, auto-populated by a trigger on auth.users
+insert (see handle_new_user() below) and updated later by
+POST /auth/sync once the frontend hands us the provider token.
+
+Every table has Row Level Security enabled. This app's own backend connects
+using the Supabase service_role key, which bypasses RLS by design (RLS is
+not meant to restrict your own trusted server) — these policies protect the
+tables from direct client access via Supabase's PostgREST/JS client using
+an end user's own session, which is the access path RLS actually governs.
 
 Revision ID: 001
-Revises: 
+Revises:
 Create Date: 2024-01-01 00:00:00.000000
 """
 from typing import Sequence, Union
@@ -29,12 +42,13 @@ def upgrade() -> None:
     op.execute("CREATE TYPE activity_type AS ENUM ('repo_connected', 'spec_uploaded', 'tasks_generated', 'commit_received', 'suggestion_created', 'suggestion_approved', 'suggestion_rejected', 'task_updated', 'webhook_installed')")
     op.execute("CREATE TYPE integration_type AS ENUM ('github', 'notion', 'jira', 'linear', 'clickup', 'confluence', 'gitlab')")
 
-    # users
+    # profiles — 1:1 extension of auth.users. id is NOT auto-generated: it is
+    # always set equal to the corresponding auth.users.id (by the trigger
+    # below, or explicitly if a row is ever inserted by the backend).
     op.create_table(
-        "users",
-        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True, default=uuid.uuid4),
-        sa.Column("github_id", sa.Integer, nullable=False, unique=True),
-        sa.Column("github_username", sa.String(255), nullable=False, unique=True),
+        "profiles",
+        sa.Column("id", postgresql.UUID(as_uuid=True), sa.ForeignKey("auth.users.id", ondelete="CASCADE"), primary_key=True),
+        sa.Column("github_username", sa.String(255), nullable=True),
         sa.Column("github_access_token", sa.Text, nullable=True),
         sa.Column("email", sa.String(255), nullable=True),
         sa.Column("name", sa.String(255), nullable=True),
@@ -43,15 +57,46 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
     )
-    op.create_index("ix_users_github_id", "users", ["github_id"])
-    op.create_index("ix_users_github_username", "users", ["github_username"])
-    op.create_index("ix_users_email", "users", ["email"])
+    op.create_index("ix_profiles_github_username", "profiles", ["github_username"])
+
+    # Auto-create a profiles row whenever a new auth.users row is created
+    # (i.e. on first GitHub sign-in via Supabase Auth). SECURITY DEFINER so
+    # it can write to public.profiles regardless of the RLS policies below.
+    op.execute(
+        """
+        CREATE OR REPLACE FUNCTION public.handle_new_user()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        SECURITY DEFINER SET search_path = public
+        AS $$
+        BEGIN
+          INSERT INTO public.profiles (id, github_username, email, name, avatar_url)
+          VALUES (
+            NEW.id,
+            NEW.raw_user_meta_data ->> 'user_name',
+            NEW.email,
+            NEW.raw_user_meta_data ->> 'full_name',
+            NEW.raw_user_meta_data ->> 'avatar_url'
+          )
+          ON CONFLICT (id) DO NOTHING;
+          RETURN NEW;
+        END;
+        $$;
+        """
+    )
+    op.execute(
+        """
+        CREATE TRIGGER on_auth_user_created
+        AFTER INSERT ON auth.users
+        FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+        """
+    )
 
     # repositories
     op.create_table(
         "repositories",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True, default=uuid.uuid4),
-        sa.Column("owner_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
+        sa.Column("owner_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("auth.users.id", ondelete="CASCADE"), nullable=False),
         sa.Column("github_repo_id", sa.Integer, nullable=False, unique=True),
         sa.Column("full_name", sa.String(512), nullable=False),
         sa.Column("name", sa.String(255), nullable=False),
@@ -81,7 +126,7 @@ def upgrade() -> None:
         sa.Column("mime_type", sa.String(100), nullable=False),
         sa.Column("storage_path", sa.Text, nullable=False),
         sa.Column("storage_url", sa.Text, nullable=True),
-        sa.Column("status", sa.Enum("pending", "processing", "done", "error", name="spec_status"), nullable=False, server_default="pending"),
+        sa.Column("status", postgresql.ENUM("pending", "processing", "done", "error", name="spec_status", create_type=False), nullable=False, server_default="pending"),
         sa.Column("extracted_text", sa.Text, nullable=True),
         sa.Column("ai_summary", sa.Text, nullable=True),
         sa.Column("task_count", sa.Integer, nullable=False, server_default="0"),
@@ -100,8 +145,8 @@ def upgrade() -> None:
         sa.Column("parent_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("tasks.id", ondelete="CASCADE"), nullable=True),
         sa.Column("title", sa.String(512), nullable=False),
         sa.Column("description", sa.Text, nullable=True),
-        sa.Column("status", sa.Enum("todo", "in_progress", "done", "blocked", "cancelled", name="task_status"), nullable=False, server_default="todo"),
-        sa.Column("priority", sa.Enum("low", "medium", "high", "critical", name="task_priority"), nullable=False, server_default="medium"),
+        sa.Column("status", postgresql.ENUM("todo", "in_progress", "done", "blocked", "cancelled", name="task_status", create_type=False), nullable=False, server_default="todo"),
+        sa.Column("priority", postgresql.ENUM("low", "medium", "high", "critical", name="task_priority", create_type=False), nullable=False, server_default="medium"),
         sa.Column("order_index", sa.Integer, nullable=False, server_default="0"),
         sa.Column("ai_tags", postgresql.ARRAY(sa.String), nullable=True),
         sa.Column("ai_context", postgresql.JSONB, nullable=True),
@@ -143,9 +188,9 @@ def upgrade() -> None:
         sa.Column("repository_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("repositories.id", ondelete="CASCADE"), nullable=False),
         sa.Column("task_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True),
         sa.Column("commit_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("commits.id", ondelete="SET NULL"), nullable=True),
-        sa.Column("reviewed_by", postgresql.UUID(as_uuid=True), sa.ForeignKey("users.id", ondelete="SET NULL"), nullable=True),
-        sa.Column("status", sa.Enum("pending", "approved", "rejected", name="suggestion_status"), nullable=False, server_default="pending"),
-        sa.Column("action", sa.Enum("status_change", "progress_update", "add_comment", name="suggestion_action"), nullable=False),
+        sa.Column("reviewed_by", postgresql.UUID(as_uuid=True), sa.ForeignKey("auth.users.id", ondelete="SET NULL"), nullable=True),
+        sa.Column("status", postgresql.ENUM("pending", "approved", "rejected", name="suggestion_status", create_type=False), nullable=False, server_default="pending"),
+        sa.Column("action", postgresql.ENUM("status_change", "progress_update", "add_comment", name="suggestion_action", create_type=False), nullable=False),
         sa.Column("proposed_status", sa.String(50), nullable=True),
         sa.Column("explanation", sa.Text, nullable=False),
         sa.Column("confidence_score", sa.Float, nullable=False, server_default="0.0"),
@@ -162,9 +207,9 @@ def upgrade() -> None:
     op.create_table(
         "activity_logs",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True, default=uuid.uuid4),
-        sa.Column("user_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("users.id", ondelete="SET NULL"), nullable=True),
+        sa.Column("user_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("auth.users.id", ondelete="SET NULL"), nullable=True),
         sa.Column("repository_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("repositories.id", ondelete="CASCADE"), nullable=True),
-        sa.Column("event_type", sa.Enum("repo_connected", "spec_uploaded", "tasks_generated", "commit_received", "suggestion_created", "suggestion_approved", "suggestion_rejected", "task_updated", "webhook_installed", name="activity_type"), nullable=False),
+        sa.Column("event_type", postgresql.ENUM("repo_connected", "spec_uploaded", "tasks_generated", "commit_received", "suggestion_created", "suggestion_approved", "suggestion_rejected", "task_updated", "webhook_installed", name="activity_type", create_type=False), nullable=False),
         sa.Column("title", sa.String(512), nullable=False),
         sa.Column("description", sa.Text, nullable=True),
         sa.Column("event_metadata", postgresql.JSONB, nullable=True),
@@ -178,8 +223,8 @@ def upgrade() -> None:
     op.create_table(
         "integrations",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True, default=uuid.uuid4),
-        sa.Column("user_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
-        sa.Column("integration_type", sa.Enum("github", "notion", "jira", "linear", "clickup", "confluence", "gitlab", name="integration_type"), nullable=False),
+        sa.Column("user_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("auth.users.id", ondelete="CASCADE"), nullable=False),
+        sa.Column("integration_type", postgresql.ENUM("github", "notion", "jira", "linear", "clickup", "confluence", "gitlab", name="integration_type", create_type=False), nullable=False),
         sa.Column("workspace_id", sa.String(255), nullable=True),
         sa.Column("workspace_name", sa.String(255), nullable=True),
         sa.Column("access_token", sa.Text, nullable=True),
@@ -192,6 +237,88 @@ def upgrade() -> None:
     )
     op.create_index("ix_integrations_user_id", "integrations", ["user_id"])
 
+    _enable_rls()
+
+
+def _enable_rls() -> None:
+    """Enable RLS on every table and add ownership-scoped policies.
+
+    This app's backend talks to Postgres using the Supabase service_role
+    key, which bypasses RLS entirely (by design — RLS governs the
+    PostgREST/anon/authenticated access path, not a trusted server). These
+    policies exist so the tables are safe if ever queried directly via
+    supabase-js with an end user's own session, and so Supabase's Security
+    Advisor doesn't flag public tables with no RLS.
+    """
+    tables = [
+        "profiles", "repositories", "project_specifications", "tasks",
+        "commits", "suggestions", "activity_logs", "integrations",
+    ]
+    for table in tables:
+        op.execute(f"ALTER TABLE public.{table} ENABLE ROW LEVEL SECURITY")
+
+    # profiles — a user can see and edit only their own profile row. Rows are
+    # created by the handle_new_user() trigger (SECURITY DEFINER), not by
+    # end users, so there is no INSERT policy for the authenticated role.
+    op.execute(
+        """
+        CREATE POLICY profiles_select_own ON public.profiles
+        FOR SELECT USING (auth.uid() = id);
+        """
+    )
+    op.execute(
+        """
+        CREATE POLICY profiles_update_own ON public.profiles
+        FOR UPDATE USING (auth.uid() = id) WITH CHECK (auth.uid() = id);
+        """
+    )
+
+    # repositories — full CRUD scoped to the owner.
+    op.execute(
+        """
+        CREATE POLICY repositories_owner_all ON public.repositories
+        FOR ALL USING (owner_id = auth.uid()) WITH CHECK (owner_id = auth.uid());
+        """
+    )
+
+    # project_specifications / tasks / commits / suggestions — scoped via
+    # the owning repository.
+    for table in ["project_specifications", "tasks", "commits", "suggestions"]:
+        op.execute(
+            f"""
+            CREATE POLICY {table}_via_repository_owner ON public.{table}
+            FOR ALL USING (
+              repository_id IN (SELECT id FROM public.repositories WHERE owner_id = auth.uid())
+            ) WITH CHECK (
+              repository_id IN (SELECT id FROM public.repositories WHERE owner_id = auth.uid())
+            );
+            """
+        )
+
+    # activity_logs — repository_id is nullable (e.g. the "repo connected"
+    # event is logged before repository ownership context applies), so also
+    # match on user_id directly.
+    op.execute(
+        """
+        CREATE POLICY activity_logs_owner ON public.activity_logs
+        FOR ALL USING (
+          user_id = auth.uid()
+          OR repository_id IN (SELECT id FROM public.repositories WHERE owner_id = auth.uid())
+        ) WITH CHECK (
+          user_id = auth.uid()
+          OR repository_id IN (SELECT id FROM public.repositories WHERE owner_id = auth.uid())
+        );
+        """
+    )
+
+    # integrations — scoped directly by user_id.
+    op.execute(
+        """
+        CREATE POLICY integrations_owner ON public.integrations
+        FOR ALL USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
+        """
+    )
+
 
 def downgrade() -> None:
     op.drop_table("integrations")
@@ -201,7 +328,9 @@ def downgrade() -> None:
     op.drop_table("tasks")
     op.drop_table("project_specifications")
     op.drop_table("repositories")
-    op.drop_table("users")
+    op.execute("DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users")
+    op.execute("DROP FUNCTION IF EXISTS public.handle_new_user()")
+    op.drop_table("profiles")
 
     # Drop enums
     for enum_name in ["integration_type", "activity_type", "suggestion_action", "suggestion_status", "spec_status", "task_priority", "task_status"]:

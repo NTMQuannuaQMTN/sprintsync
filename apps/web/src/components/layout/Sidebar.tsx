@@ -141,7 +141,7 @@ export default function Sidebar({ pendingSuggestions = 0, repoId, repoName }: Si
               />
             ) : (
               <div className="w-6 h-6 rounded-full bg-blue-100 flex items-center justify-center text-[10px] font-bold text-blue-700 flex-shrink-0">
-                {(user.name || user.github_username)[0].toUpperCase()}
+                {(user.name || user.github_username || '?')[0].toUpperCase()}
               </div>
             )}
             <div className="flex-1 min-w-0">

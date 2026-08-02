@@ -2,7 +2,7 @@
 import uuid
 from typing import Optional
 
-from sqlalchemy import String, Text, Boolean, Integer, ForeignKey, Index
+from sqlalchemy import String, Text, Boolean, Integer, Index
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -13,8 +13,12 @@ from src.models.base import UUIDMixin, TimestampMixin
 class Repository(UUIDMixin, TimestampMixin, Base):
     __tablename__ = "repositories"
 
+    # References Supabase's auth.users(id) — enforced at the DB level by the
+    # Alembic migration's raw DDL, not by a SQLAlchemy ForeignKey() here (see
+    # models/profile.py for why). No `owner` relationship; load the owning
+    # Profile with a separate query keyed on this id.
     owner_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+        UUID(as_uuid=True), nullable=False, index=True
     )
 
     # GitHub metadata
@@ -36,7 +40,6 @@ class Repository(UUIDMixin, TimestampMixin, Base):
     health_score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     # Relationships
-    owner: Mapped["User"] = relationship("User", back_populates="repositories")  # noqa: F821
     project_specs: Mapped[list["ProjectSpecification"]] = relationship(  # noqa: F821
         "ProjectSpecification", back_populates="repository", cascade="all, delete-orphan"
     )

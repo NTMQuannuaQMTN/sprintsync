@@ -9,7 +9,6 @@ from src.core.config import settings
 
 
 GITHUB_API_BASE = "https://api.github.com"
-GITHUB_OAUTH_TOKEN_URL = "https://github.com/login/oauth/access_token"
 
 
 class GitHubService:
@@ -102,26 +101,6 @@ class GitHubService:
         client = await self._get_client()
         resp = await client.delete(f"{GITHUB_API_BASE}/repos/{full_name}/hooks/{hook_id}")
         resp.raise_for_status()
-
-
-async def exchange_code_for_token(code: str) -> str:
-    """Exchange GitHub OAuth code for access token."""
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            GITHUB_OAUTH_TOKEN_URL,
-            data={
-                "client_id": settings.GITHUB_CLIENT_ID,
-                "client_secret": settings.GITHUB_CLIENT_SECRET,
-                "code": code,
-                "redirect_uri": settings.GITHUB_REDIRECT_URI,
-            },
-            headers={"Accept": "application/json"},
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        if "error" in data:
-            raise ValueError(f"GitHub OAuth error: {data['error_description']}")
-        return data["access_token"]
 
 
 def verify_webhook_signature(payload: bytes, signature: str) -> bool:

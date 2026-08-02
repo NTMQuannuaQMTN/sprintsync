@@ -16,6 +16,7 @@ from src.schemas.project_spec import SpecOut
 from src.schemas.task import TaskOut
 from src.services.document_parser import extract_text
 from src.services.ai import ai_service
+from src.api.v1.tasks import _to_task_out
 
 router = APIRouter(prefix="/repositories/{repo_id}/specs", tags=["specs"])
 
@@ -158,4 +159,4 @@ async def get_spec_tasks(
         .where(Task.spec_id == spec_id, Task.repository_id == repo_id)
         .order_by(Task.order_index)
     )
-    return [TaskOut.model_validate(t) for t in result.scalars().all()]
+    return [await _to_task_out(t, db) for t in result.scalars().all()]

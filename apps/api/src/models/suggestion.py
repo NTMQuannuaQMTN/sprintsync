@@ -36,17 +36,18 @@ class Suggestion(UUIDMixin, TimestampMixin, Base):
     commit_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("commits.id", ondelete="SET NULL"), nullable=True
     )
-    reviewed_by: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
-    )
+    # References auth.users(id) — see models/profile.py for why there's no
+    # SQLAlchemy ForeignKey() wrapper on this column.
+    reviewed_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
 
     status: Mapped[SuggestionStatus] = mapped_column(
-        SAEnum(SuggestionStatus, name="suggestion_status"),
+        SAEnum(SuggestionStatus, name="suggestion_status", values_callable=lambda obj: [e.value for e in obj]),
         default=SuggestionStatus.PENDING,
         nullable=False,
     )
     action: Mapped[SuggestionAction] = mapped_column(
-        SAEnum(SuggestionAction, name="suggestion_action"), nullable=False
+        SAEnum(SuggestionAction, name="suggestion_action", values_callable=lambda obj: [e.value for e in obj]),
+        nullable=False,
     )
 
     # Proposed change

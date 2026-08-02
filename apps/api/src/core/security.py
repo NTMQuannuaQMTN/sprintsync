@@ -1,7 +1,13 @@
-"""JWT token utilities and authentication helpers."""
-from datetime import datetime, timedelta, timezone
-from typing import Any
+"""Supabase JWT verification.
 
+Identity and session issuance are entirely owned by Supabase Auth — this
+app never mints its own tokens. The frontend authenticates via
+supabase-js (GitHub OAuth) and attaches the resulting Supabase access
+token as a Bearer token on every request; this module only verifies that
+token was really issued by this project's Supabase instance and extracts
+the user id (the JWT's `sub` claim, which equals auth.users.id /
+profiles.id).
+"""
 from jose import JWTError, jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -11,18 +17,19 @@ from src.core.config import settings
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
-def create_access_token(subject: str | Any, expires_delta: timedelta | None = None) -> str:
-    expire = datetime.now(timezone.utc) + (
-        expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    )
-    payload = {"sub": str(subject), "exp": expire, "iat": datetime.now(timezone.utc)}
-    return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
-
-
-def decode_access_token(token: str) -> dict:
+def decode_supabase_token(token: str) -> dict:
+    if not settings.SUPABASE_JWT_SECRET:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="SUPABASE_JWT_SECRET is not configured",
+        )
     try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
-        return payload
+        return jwt.decode(
+            token,
+            settings.SUPABASE_JWT_SECRET,
+            algorithms=["HS256"],
+            audience="authenticated",
+        )
     except JWTError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -39,7 +46,7 @@ async def get_current_user_id(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated",
         )
-    payload = decode_access_token(credentials.credentials)
+    payload = decode_supabase_token(credentials.credentials)
     user_id: str | None = payload.get("sub")
     if not user_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")

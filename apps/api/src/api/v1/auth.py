@@ -1,88 +1,65 @@
-"""GitHub OAuth authentication endpoints."""
-from fastapi import APIRouter, HTTPException, Depends, Query
-from fastapi.responses import RedirectResponse
+"""Auth endpoints.
+
+GitHub OAuth itself is entirely handled by Supabase Auth (configured in the
+Supabase dashboard under Authentication > Providers > GitHub) — the
+frontend calls supabase.auth.signInWithOAuth() directly and never talks to
+this backend during the login flow itself. This module only:
+
+1. Returns the current user's profile, given a valid Supabase access token.
+2. Accepts the GitHub provider token once, right after sign-in, so this
+   backend can call the GitHub API later (listing repos, installing
+   webhooks) — Supabase returns that token to the client at sign-in time
+   but does not persist or refresh it for us.
+"""
+from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from src.core.config import settings
 from src.core.database import get_db
-from src.core.security import create_access_token, get_current_user_id
-from src.models.user import User
-from src.schemas.user import UserOut
-from src.services.github import exchange_code_for_token, GitHubService
+from src.core.security import get_current_user_id
+from src.models.profile import Profile
+from src.schemas.profile import ProfileOut, SyncProviderToken
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
-@router.get("/login")
-async def github_login():
-    """Redirect to GitHub OAuth authorization page."""
-    scope = "read:user user:email repo"
-    url = (
-        f"https://github.com/login/oauth/authorize"
-        f"?client_id={settings.GITHUB_CLIENT_ID}"
-        f"&redirect_uri={settings.GITHUB_REDIRECT_URI}"
-        f"&scope={scope}"
-    )
-    return RedirectResponse(url=url)
-
-
-@router.get("/callback")
-async def github_callback(
-    code: str = Query(...),
-    db: AsyncSession = Depends(get_db),
-):
-    """Exchange GitHub OAuth code for JWT access token."""
-    try:
-        github_token = await exchange_code_for_token(code)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    gh = GitHubService(github_token)
-    try:
-        gh_user = await gh.get_authenticated_user()
-    finally:
-        await gh.close()
-
-    # Upsert user
-    result = await db.execute(select(User).where(User.github_id == gh_user["id"]))
-    user = result.scalar_one_or_none()
-
-    if not user:
-        user = User(
-            github_id=gh_user["id"],
-            github_username=gh_user["login"],
-            github_access_token=github_token,
-            email=gh_user.get("email"),
-            name=gh_user.get("name"),
-            avatar_url=gh_user.get("avatar_url"),
-            bio=gh_user.get("bio"),
-        )
-        db.add(user)
-    else:
-        user.github_access_token = github_token
-        user.avatar_url = gh_user.get("avatar_url")
-        user.name = gh_user.get("name")
-        user.email = gh_user.get("email")
-
-    await db.commit()
-    await db.refresh(user)
-
-    access_token = create_access_token(subject=str(user.id))
-
-    # Redirect to frontend with token
-    redirect_url = f"{settings.FRONTEND_URL}/dashboard?token={access_token}"
-    return RedirectResponse(url=redirect_url, status_code=302)
-
-
-@router.get("/me", response_model=UserOut)
+@router.get("/me", response_model=ProfileOut)
 async def get_me(
     user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get currently authenticated user."""
-    result = await db.execute(select(User).where(User.id == user_id))
-    user = result.scalar_one_or_none()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    return user
+    """Get the currently authenticated user's profile."""
+    result = await db.execute(select(Profile).where(Profile.id == user_id))
+    profile = result.scalar_one_or_none()
+    if not profile:
+        raise HTTPException(
+            status_code=404,
+            detail="Profile not found — the auth.users -> profiles trigger may not have fired yet",
+        )
+    return profile
+
+
+@router.post("/sync", response_model=ProfileOut)
+async def sync_provider_token(
+    body: SyncProviderToken,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Store the GitHub provider token for the current user.
+
+    Call this once, right after supabase.auth.signInWithOAuth() resolves,
+    passing session.provider_token from the Supabase client. Without this,
+    GitHub-API-dependent endpoints (listing repos, installing webhooks)
+    have no token to call GitHub with.
+    """
+    result = await db.execute(select(Profile).where(Profile.id == user_id))
+    profile = result.scalar_one_or_none()
+    if not profile:
+        raise HTTPException(
+            status_code=404,
+            detail="Profile not found — the auth.users -> profiles trigger may not have fired yet",
+        )
+    profile.github_access_token = body.provider_token
+    await db.commit()
+    await db.refresh(profile)
+    return profile

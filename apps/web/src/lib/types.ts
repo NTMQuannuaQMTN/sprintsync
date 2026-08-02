@@ -1,9 +1,10 @@
 // ─── Core Domain Types ───────────────────────────────────────────────────────
 
+// Matches the backend's ProfileOut — a 1:1 extension of Supabase's
+// auth.users, keyed by the same id (auth.uid()).
 export interface User {
   id: string
-  github_id: number
-  github_username: string
+  github_username: string | null
   email: string | null
   name: string | null
   avatar_url: string | null
