@@ -25,4 +25,15 @@ if (!url || !anonKey) {
 export const supabase = createClient(
   url || 'https://placeholder.supabase.co',
   anonKey || 'placeholder-anon-key',
+  {
+    auth: {
+      // Explicit, not the library default ('implicit'). PKCE is what
+      // Supabase's own docs recommend for all new apps, and it's what the
+      // hosted GitHub OAuth callback redirects with (?code=...) in
+      // practice — leaving this on 'implicit' causes the client to detect
+      // a flow-type mismatch on the redirect and silently discard the
+      // session instead of exchanging the code, with no error surfaced.
+      flowType: 'pkce',
+    },
+  },
 )

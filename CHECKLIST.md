@@ -29,7 +29,7 @@ Legend: `NOT_STARTED` `IN_PROGRESS` `PARTIAL` `COMPLETED` `BLOCKED`
 
 ### AUTH-001 — GitHub OAuth login page exists
 - **Status:** COMPLETED (re-architected — Supabase-managed now, not custom)
-- **Evidence:** `apps/web/src/app/login/page.tsx` calls `supabase.auth.signInWithOAuth({ provider: 'github', options: { scopes: 'read:user user:email repo', redirectTo: '<origin>/dashboard' } })` — GitHub OAuth itself (client id/secret, the authorize/token exchange, callback handling) is entirely owned by Supabase Auth, configured in the Supabase dashboard (Authentication > Providers > GitHub), not in this app. This app's own `/api/v1/auth/login` and `/auth/callback` endpoints were **deleted** — they no longer exist or are needed.
+- **Evidence:** `apps/web/src/app/login/page.tsx` calls `supabase.auth.signInWithOAuth({ provider: 'github', options: { scopes: 'read:user user:email repo', redirectTo: '<origin>/auth/callback' } })` — GitHub OAuth itself (client id/secret, the authorize/token exchange, Supabase's own hosted callback) is entirely owned by Supabase Auth, configured in the Supabase dashboard (Authentication > Providers > GitHub), not in this app. This app's own `/api/v1/auth/login` and `/auth/callback` **API** endpoints were **deleted** — they no longer exist or are needed. A new app-side page, `apps/web/src/app/auth/callback/page.tsx`, is the `redirectTo` target: it waits for `supabase.auth.getSession()` to resolve the session from the redirect, does the one-shot `POST /auth/sync` with `session.provider_token`, surfaces `?error=`/`?error_description=` from Supabase (e.g. "provider is not enabled") instead of silently bouncing to `/login`, then sends the user to `/dashboard`.
 - **Verification:** `npx tsc --noEmit` clean; `npm run build` includes `/login`. Live end-to-end OAuth exchange against the real GitHub provider is untested — that requires a real Supabase project with GitHub configured and a real anon key (see ENV-001).
 
 ### AUTH-002 — OAuth callback is implemented
@@ -179,7 +179,7 @@ credentials are in place.
 
 ## Bugs found this session (via live execution, not code reading)
 
-Eight real, previously-undiscovered bugs — every one of them would have hit
+Ten real, previously-undiscovered bugs — every one of them would have hit
 a real deployment, and none were visible from reading the code alone. This
 is the core argument for autopilot's "run it, don't just read it" rule.
 
@@ -226,6 +226,20 @@ is the core argument for autopilot's "run it, don't just read it" rule.
 - **Evidence:** `lib/supabase.ts` originally threw if `NEXT_PUBLIC_SUPABASE_URL`/`ANON_KEY` were missing. That module is imported (transitively) by several client components, which Next.js prerenders at **build time** even though they're `'use client'` — so `npm run build` failed outright (`Error occurred prerendering page "/settings"`) in this sandbox, which has no real Supabase project configured yet. This would hit any CI/deploy pipeline that builds before secrets are injected, too.
 - **Fix:** Changed the throw to a `console.warn` plus a placeholder URL/key fallback, so the build always succeeds; a real auth attempt against a placeholder project fails at the point of the actual network call (clear error), not at page-generation time.
 - **Files:** `apps/web/src/lib/supabase.ts`.
+
+### BUG-009 — OAuth flow-type mismatch silently discarded the session on every real login attempt
+- **Status:** FIXED
+- **Evidence:** User-reported: after completing the GitHub OAuth screen for real (against their actual, now-configured Supabase project), `/auth/callback` showed "Could not establish a session after sign-in" with no other error. Root cause, traced through `@supabase/auth-js`'s `GoTrueClient._initialize()`/`_getSessionFromURL()`: our client was created without an explicit `flowType`, defaulting to the library's `'implicit'`. Supabase's hosted GitHub callback in practice redirects with a PKCE-style `?code=...` param. When the client detects a `callbackUrlType` of `'pkce'` while its own configured `flowType` is `'implicit'`, `_getSessionFromURL` deliberately throws `AuthImplicitGrantRedirectError('Not a valid implicit grant flow url.')` as a flow-mismatch guard — and `_initialize()` swallows that into a plain `{session: null}` result with no error propagated to `getSession()`, since it falls through to "try to recover session from storage" instead. Nothing in application code was wrong; the default client config just didn't match what the server actually sends.
+- **Fix:** Set `flowType: 'pkce'` explicitly in `createClient(...)` (`lib/supabase.ts`) — matches Supabase's own current recommendation for all new apps, not just a workaround. Also improved `auth/callback/page.tsx`'s error message to report whether the redirect actually carried a code, a hash token, or neither — so if this class of issue recurs (e.g. a future library default change) it's diagnosable from the error screen alone instead of a bare "could not establish a session."
+- **Files:** `apps/web/src/lib/supabase.ts`, `apps/web/src/app/auth/callback/page.tsx`.
+- **Notes:** This was found only because the user actually tried the real OAuth flow against their real, now-configured Supabase project — no amount of local stub-auth testing this session could have caught it, since the stub never exercised the real GoTrue server's redirect shape. See BUG-010 — the first attempt at this fix introduced a new regression.
+
+### BUG-010 — The BUG-009 fix's own "backstop" double-exchanged the single-use PKCE code
+- **Status:** FIXED
+- **Evidence:** User-reported, immediately after BUG-009's fix: `PKCE code verifier not found in storage`. Cause: alongside the `flowType: 'pkce'` fix, the callback page also added a manual `exchangeCodeForSession(code)` call as a defensive "backstop" for whenever `getSession()` came back without a session. But `getSession()` already triggers the SDK's own automatic PKCE exchange internally (via `GoTrueClient._initialize()`), which consumes the stored `code_verifier` — PKCE codes are single-use by design. The manual backstop then tried to exchange the *same* code a second time and legitimately failed, since the verifier was already gone after the first (automatic) attempt.
+- **Fix:** Removed the manual `exchangeCodeForSession` call entirely. `getSession()` alone is sufficient — it already awaits the SDK's internal, memoized initialization, which handles both PKCE and implicit-flow session detection. Kept the diagnostic error-message improvements from BUG-009.
+- **Files:** `apps/web/src/app/auth/callback/page.tsx`.
+- **Lesson:** don't add a "just in case" retry around an SDK operation without checking whether the underlying resource is single-use — a defensive-looking fallback made things worse here, not better.
 
 ---
 

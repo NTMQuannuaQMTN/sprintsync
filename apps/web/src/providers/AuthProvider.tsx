@@ -1,10 +1,9 @@
 'use client'
 
-import { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react'
+import { createContext, useContext, useEffect, useState, useCallback } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
 import type { User } from '@/lib/types'
 import { fetchCurrentUser, signOut } from '@/lib/auth'
-import { authApi } from '@/lib/api'
 import { supabase } from '@/lib/supabase'
 
 interface AuthContext {
@@ -21,18 +20,16 @@ const AuthCtx = createContext<AuthContext>({
   refresh: async () => {},
 })
 
-const PUBLIC_PATHS = ['/', '/login']
+// /auth/callback owns the post-OAuth handshake (session detection, syncing
+// the GitHub provider token) — it must never get bounced to /login by the
+// !u redirect below while that's still in flight.
+const PUBLIC_PATHS = ['/', '/login', '/auth/callback']
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
   const router = useRouter()
   const pathname = usePathname()
-  // Guards against calling /auth/sync more than once per browser tab for the
-  // same provider token (onAuthStateChange can fire SIGNED_IN more than once,
-  // e.g. on token refresh, and Supabase only includes provider_token on the
-  // initial OAuth redirect anyway).
-  const syncedTokenRef = useRef<string | null>(null)
 
   const refresh = useCallback(async () => {
     const u = await fetchCurrentUser()
@@ -54,19 +51,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
     init()
 
-    const { data: subscription } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (event === 'SIGNED_IN' && session?.provider_token && syncedTokenRef.current !== session.provider_token) {
-        syncedTokenRef.current = session.provider_token
-        try {
-          await authApi.syncProviderToken(session.provider_token)
-        } catch {
-          // Non-fatal — GitHub-API-dependent endpoints will just 400 until
-          // the user re-authenticates; don't block the sign-in itself on it.
-        }
-      }
+    const { data: subscription } = supabase.auth.onAuthStateChange(async (event) => {
       if (event === 'SIGNED_OUT') {
         setUser(null)
-        syncedTokenRef.current = null
         if (!PUBLIC_PATHS.includes(pathname)) router.replace('/login')
         return
       }
