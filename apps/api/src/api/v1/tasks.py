@@ -104,7 +104,15 @@ async def bulk_create_tasks(
 
     tasks = []
     for i, td in enumerate(data.tasks):
-        t = Task(repository_id=repo_id, spec_id=data.spec_id, order_index=i, **td.model_dump())
+        # td.model_dump() already contains `order_index` (TaskCreate declares
+        # it, default 0) — exclude it so this loop's position `i` is what
+        # actually wins, instead of colliding as a duplicate kwarg.
+        t = Task(
+            repository_id=repo_id,
+            spec_id=data.spec_id,
+            order_index=i,
+            **td.model_dump(exclude={"order_index"}),
+        )
         db.add(t)
         tasks.append(t)
 

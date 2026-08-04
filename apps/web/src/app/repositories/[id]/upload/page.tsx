@@ -148,11 +148,16 @@ export default function UploadSpecPage() {
                   </div>
                 ))}
               </div>
-              <div className="px-5 py-4 border-t border-gray-50 flex items-center justify-end">
+              <div className="px-5 py-4 border-t border-gray-50 flex items-center justify-between gap-3">
+                {saveMutation.isError && (
+                  <p className="text-xs text-rose-600 flex-1 min-w-0 truncate">
+                    {(saveMutation.error as Error).message || 'Could not save tasks'}
+                  </p>
+                )}
                 <button
                   onClick={() => saveMutation.mutate()}
                   disabled={selectedCount === 0 || saveMutation.isPending}
-                  className="flex items-center gap-2 px-4 py-2 bg-[#16A34A] text-white text-sm rounded-lg hover:bg-green-700 transition-colors font-medium disabled:opacity-50"
+                  className="flex items-center gap-2 px-4 py-2 bg-[#16A34A] text-white text-sm rounded-lg hover:bg-green-700 transition-colors font-medium disabled:opacity-50 flex-shrink-0 ml-auto"
                 >
                   {saveMutation.isPending ? (
                     <Loader2 className="w-4 h-4 animate-spin" />

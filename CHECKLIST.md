@@ -276,6 +276,14 @@ generic symptom."
 - **Notes:** Restarted the live-running backend (port 8000, the one the frontend actually talks to) immediately after this fix — the previous partial fix was live and would have caused intermittent request failures under real multi-request usage, not just in tests.
 - **Lesson:** a fix that passes one manual smoke test isn't verified — the DB-integration test suite added as part of this same autopilot pass is what actually caught this, reinforcing why TASK 1/4 (adding real integration tests) mattered beyond just "checking a box."
 
+### BUG-015 — `POST /tasks/bulk` crashed on every real call: duplicate `order_index` keyword argument
+- **Status:** FIXED
+- **Evidence:** User asked to "finish" the upload page's "Save N tasks" button. That button calls `POST /repositories/{id}/tasks/bulk` with `spec_id` set — a path that had never actually been exercised end-to-end before (the earlier spec-upload test stopped at the draft-tasks response; single-task create and the AI-suggestion flow both go through different endpoints). Writing a real test for it (`test_save_reviewed_draft_tasks_persists_them_with_spec_link`) hit an immediate `TypeError: src.models.task.Task() got multiple values for keyword argument 'order_index'` — `bulk_create_tasks` (`tasks.py`) does `Task(..., order_index=i, **td.model_dump())`, but `TaskCreate` already declares `order_index` (default 0), so `td.model_dump()` includes it too, colliding with the explicit kwarg. This means the "Save tasks" button, and any other bulk-create call, would have failed for **every real user**, 100% of the time — not an edge case.
+- **Fix:** `Task(..., order_index=i, **td.model_dump(exclude={"order_index"}))` — the loop's position now wins unambiguously, no collision.
+- **Files:** `apps/api/src/api/v1/tasks.py`.
+- **Also fixed while here:** the upload page's "Save N tasks" button had no error display at all if the save failed (`saveMutation.isError` was never checked) — unlike the upload step, which does show errors. Added the same pattern. `apps/web/src/app/repositories/[id]/upload/page.tsx`.
+- **Lesson:** a code path with no test and no manual click-through can look completely fine on read-through (this one did, in an earlier pass) and still be 100%-broken — `**dict()` spread plus an explicit overlapping kwarg is a easy-to-miss collision that only surfaces at call time, never at review time.
+
 ---
 
 ## Repo-hygiene items (not in the original 20, but blocked "the app runs")

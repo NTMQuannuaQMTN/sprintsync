@@ -29,6 +29,28 @@ async def test_create_list_update_task(client, test_repo):
     assert updated.json()["status"] == "in_progress"
 
 
+async def test_delete_task_removes_it_for_real(client, test_repo):
+    create = await client.post(
+        f"/api/v1/repositories/{test_repo}/tasks",
+        json={"title": "Task to be deleted", "priority": "low"},
+    )
+    task_id = create.json()["id"]
+
+    deleted = await client.delete(f"/api/v1/repositories/{test_repo}/tasks/{task_id}")
+    assert deleted.status_code == 204
+
+    # Really gone from the database, not just hidden.
+    get_after = await client.get(f"/api/v1/repositories/{test_repo}/tasks/{task_id}")
+    assert get_after.status_code == 404
+
+    listed = await client.get(f"/api/v1/repositories/{test_repo}/tasks")
+    assert all(t["id"] != task_id for t in listed.json())
+
+    # Deleting the same task again is a 404, not a silent no-op or 500.
+    delete_again = await client.delete(f"/api/v1/repositories/{test_repo}/tasks/{task_id}")
+    assert delete_again.status_code == 404
+
+
 async def test_task_from_another_users_repo_is_not_visible(client, test_repo):
     """_assert_repo_owner should 404, not 403 or leak data, for a repo_id
     that exists but isn't owned by the authenticated user."""
