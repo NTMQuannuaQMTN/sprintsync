@@ -45,7 +45,12 @@ class GitHubService:
         while True:
             resp = await client.get(
                 f"{GITHUB_API_BASE}/user/repos",
-                params={"per_page": per_page, "page": page, "sort": "updated", "type": "owner"},
+                params={
+                    "per_page": per_page,
+                    "page": page,
+                    "sort": "updated",
+                    "affiliation": "owner,collaborator,organization_member",
+                },
             )
             resp.raise_for_status()
             data = resp.json()
