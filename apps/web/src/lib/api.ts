@@ -71,6 +71,13 @@ export const authApi = {
       method: 'POST',
       body: JSON.stringify({ provider_token: providerToken }),
     }),
+  /** Post-signup onboarding: GitHub accounts often have no public display
+   * name, so the auth.users -> profiles trigger leaves `name` null. */
+  updateName: (name: string) =>
+    request<User>('/auth/me', {
+      method: 'PATCH',
+      body: JSON.stringify({ name }),
+    }),
 }
 
 // ─── Dashboard ────────────────────────────────────────────────────────────────

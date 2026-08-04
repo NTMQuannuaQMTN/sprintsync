@@ -23,3 +23,11 @@ class SyncProviderToken(BaseModel):
     GitHub API calls (listing repos, installing webhooks) — Supabase itself
     does not persist or refresh this token for us."""
     provider_token: str
+
+
+class ProfileUpdate(BaseModel):
+    """GitHub accounts often have no public display name (raw_user_meta_data
+    ->> 'full_name' is empty), so the auth.users -> profiles trigger leaves
+    `name` null for a lot of real sign-ups. The frontend prompts for it
+    once, right after first sign-in, and sends it here."""
+    name: str

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { AlertCircle } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
@@ -9,25 +9,40 @@ import { authApi } from '@/lib/api'
 /**
  * Post-login handshake. This is where login/page.tsx's
  * supabase.auth.signInWithOAuth({ redirectTo }) lands after GitHub hands
- * control back to Supabase and Supabase redirects here with a session.
+ * control back to Supabase and Supabase redirects here with a `?code=...`
+ * (PKCE flow — see lib/supabase.ts).
+ *
+ * This page is the ONLY place that ever calls exchangeCodeForSession():
+ * lib/supabase.ts sets `detectSessionInUrl: false` specifically so the SDK
+ * never tries to do this automatically. Two exchange attempts for the same
+ * code always fails the second time (PKCE codes are single-use — see
+ * CHECKLIST.md BUG-010) and relying on the SDK's automatic path swallows
+ * the real error entirely (getSession() awaits the same init step but
+ * discards its result, always surfacing a generic "no session" no matter
+ * what actually went wrong — see BUG-009). Doing the exchange explicitly,
+ * exactly once, is what actually surfaces a diagnosable error message.
  *
  * Responsibilities, in order:
- *  1. Let supabase-js finish parsing the session out of the redirect URL.
+ *  1. Exchange the `code` for a real session.
  *  2. Hand the GitHub provider_token to our backend (POST /auth/sync) —
- *     Supabase only includes it on this initial redirect, never again, so
+ *     Supabase only includes it on this initial exchange, never again, so
  *     this is the one place in the app that can ever capture it.
- *  3. Send the user on to the dashboard.
- *
- * Surfaces a real error state instead of bouncing to /login silently —
- * Supabase can redirect here with ?error=...&error_description=... (e.g.
- * "provider is not enabled") which is far more useful shown to the user
- * than swallowed.
+ *  3. Send the user on to /onboarding (if their profile has no display
+ *     name yet — common, since GitHub accounts frequently don't set a
+ *     public full name) or straight to /dashboard.
  */
 export default function AuthCallbackPage() {
   const router = useRouter()
   const [error, setError] = useState<string | null>(null)
+  // Guards against React Strict Mode's dev-only double-invoke of effects —
+  // a second exchange attempt for the same code always fails, since the
+  // code (and its verifier) are single-use.
+  const ranRef = useRef(false)
 
   useEffect(() => {
+    if (ranRef.current) return
+    ranRef.current = true
+
     let active = true
 
     const run = async () => {
@@ -38,42 +53,44 @@ export default function AuthCallbackPage() {
         return
       }
 
-      // supabase-js already exchanges a PKCE `code` (or parses an implicit
-      // hash token) automatically as part of its own initialization, the
-      // first time any auth method is called on this client — getSession()
-      // triggers and awaits that. Do NOT also call
-      // exchangeCodeForSession(code) manually here "just in case": PKCE
-      // codes are single-use, and the automatic exchange already consumes
-      // the stored code_verifier, so a second manual attempt reliably fails
-      // with "PKCE code verifier not found in storage" even though the
-      // first (automatic) exchange may have succeeded just fine.
-      const { data, error: sessionError } = await supabase.auth.getSession()
-
-      if (!active) return
-
-      if (sessionError || !data.session) {
-        const hasCode = Boolean(params.get('code'))
-        const hasHashToken = window.location.hash.includes('access_token')
+      const code = params.get('code')
+      if (!code) {
         setError(
-          (sessionError?.message || 'Could not establish a session after sign-in.') +
-            ` (redirect had ${hasCode ? 'a code param' : hasHashToken ? 'a hash token' : 'no auth params at all'} —` +
-            ' if this keeps happening, check Supabase dashboard > Authentication > URL Configuration > Redirect URLs' +
-            ` includes exactly ${window.location.origin}/auth/callback)`,
+          'No authorization code in the redirect URL. Check Supabase dashboard > ' +
+            'Authentication > URL Configuration > Redirect URLs includes exactly ' +
+            `${window.location.origin}/auth/callback.`,
         )
         return
       }
 
+      const { data, error: exchangeError } = await supabase.auth.exchangeCodeForSession(code)
+      if (!active) return
+
+      if (exchangeError || !data.session) {
+        setError(exchangeError?.message || 'Could not establish a session after sign-in.')
+        return
+      }
+
+      let profile = null
       if (data.session.provider_token) {
         try {
-          await authApi.syncProviderToken(data.session.provider_token)
+          profile = await authApi.syncProviderToken(data.session.provider_token)
         } catch {
           // Non-fatal: land the user in the app regardless. Repository
           // listing/connecting will surface a clear error if the token
           // never made it through, instead of blocking sign-in on it.
         }
       }
+      if (!profile) {
+        try {
+          profile = await authApi.getMe()
+        } catch {
+          // Fall through — still send them into the app; AppShell/AuthProvider
+          // will sort out auth state from here.
+        }
+      }
 
-      router.replace('/dashboard')
+      router.replace(profile && !profile.name ? '/onboarding' : '/dashboard')
     }
 
     run()

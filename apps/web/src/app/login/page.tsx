@@ -12,6 +12,7 @@ export default function LoginPage() {
 
   useEffect(() => {
     isAuthenticated().then((authed) => {
+      console.log(authed);
       if (authed) router.replace('/dashboard')
     })
   }, [router])

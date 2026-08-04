@@ -34,6 +34,13 @@ export const supabase = createClient(
       // a flow-type mismatch on the redirect and silently discard the
       // session instead of exchanging the code, with no error surfaced.
       flowType: 'pkce',
+      // The app has a dedicated callback route (app/auth/callback/page.tsx)
+      // that exchanges the code explicitly and reports the *real* error if
+      // it fails. The SDK's own automatic detectSessionInUrl handling would
+      // otherwise race it silently: getSession() awaits the same internal
+      // init step but discards whatever error it produced, always
+      // surfacing a generic "no session" with no way to tell why.
+      detectSessionInUrl: false,
     },
   },
 )

@@ -18,7 +18,7 @@ from sqlalchemy import select
 from src.core.database import get_db
 from src.core.security import get_current_user_id
 from src.models.profile import Profile
-from src.schemas.profile import ProfileOut, SyncProviderToken
+from src.schemas.profile import ProfileOut, SyncProviderToken, ProfileUpdate
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -60,6 +60,32 @@ async def sync_provider_token(
             detail="Profile not found — the auth.users -> profiles trigger may not have fired yet",
         )
     profile.github_access_token = body.provider_token
+    await db.commit()
+    await db.refresh(profile)
+    return profile
+
+
+@router.patch("/me", response_model=ProfileOut)
+async def update_me(
+    body: ProfileUpdate,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Set the current user's display name.
+
+    Used by the post-signup onboarding step: GitHub accounts frequently have
+    no public display name, so the auth.users -> profiles trigger leaves
+    `name` null and the frontend asks for it once, right after first
+    sign-in.
+    """
+    result = await db.execute(select(Profile).where(Profile.id == user_id))
+    profile = result.scalar_one_or_none()
+    if not profile:
+        raise HTTPException(
+            status_code=404,
+            detail="Profile not found — the auth.users -> profiles trigger may not have fired yet",
+        )
+    profile.name = body.name.strip()
     await db.commit()
     await db.refresh(profile)
     return profile

@@ -179,9 +179,12 @@ credentials are in place.
 
 ## Bugs found this session (via live execution, not code reading)
 
-Ten real, previously-undiscovered bugs — every one of them would have hit
-a real deployment, and none were visible from reading the code alone. This
-is the core argument for autopilot's "run it, don't just read it" rule.
+Eleven real, previously-undiscovered bugs — every one of them would have
+hit a real deployment, and none were visible from reading the code alone.
+This is the core argument for autopilot's "run it, don't just read it"
+rule — and BUG-009 through BUG-011 in particular are the argument for
+"when something is still broken, get the real error out of the SDK rather
+than tweaking around a generic one."
 
 ### BUG-001 — `ActivityLog.metadata` reserved-attribute crash
 - **Status:** FIXED
@@ -237,9 +240,16 @@ is the core argument for autopilot's "run it, don't just read it" rule.
 ### BUG-010 — The BUG-009 fix's own "backstop" double-exchanged the single-use PKCE code
 - **Status:** FIXED
 - **Evidence:** User-reported, immediately after BUG-009's fix: `PKCE code verifier not found in storage`. Cause: alongside the `flowType: 'pkce'` fix, the callback page also added a manual `exchangeCodeForSession(code)` call as a defensive "backstop" for whenever `getSession()` came back without a session. But `getSession()` already triggers the SDK's own automatic PKCE exchange internally (via `GoTrueClient._initialize()`), which consumes the stored `code_verifier` — PKCE codes are single-use by design. The manual backstop then tried to exchange the *same* code a second time and legitimately failed, since the verifier was already gone after the first (automatic) attempt.
-- **Fix:** Removed the manual `exchangeCodeForSession` call entirely. `getSession()` alone is sufficient — it already awaits the SDK's internal, memoized initialization, which handles both PKCE and implicit-flow session detection. Kept the diagnostic error-message improvements from BUG-009.
+- **Fix (partial — see BUG-011):** Removed the manual `exchangeCodeForSession` call, relying on `getSession()`'s internal automatic exchange alone. This stopped the double-exchange crash, but — as BUG-011 found immediately after — `getSession()` turned out to be the wrong primitive to rely on at all for this, not just "good enough now that it's called once."
 - **Files:** `apps/web/src/app/auth/callback/page.tsx`.
 - **Lesson:** don't add a "just in case" retry around an SDK operation without checking whether the underlying resource is single-use — a defensive-looking fallback made things worse here, not better.
+
+### BUG-011 — `getSession()` silently swallows the real PKCE-exchange error, always showing the same generic message
+- **Status:** FIXED
+- **Evidence:** After BUG-010's fix, sign-in still failed with the exact same generic "Could not establish a session after sign-in" — with no new information despite a completely different underlying condition each time. Root cause, confirmed by reading `GoTrueClient.getSession()`'s source directly: it does `await this.initializePromise;` **without inspecting the result** — any error produced by the automatic PKCE exchange inside `_initialize()`/`_getSessionFromURL()` is discarded entirely; `getSession()` just goes on to read whatever ended up in memory (`null`, if the exchange failed for any reason). This makes `getSession()` structurally incapable of reporting *why* a callback-URL exchange failed — a page relying on it for that purpose will always show the same fallback text no matter the actual cause (expired code, reused code, verifier mismatch, network error, wrong redirect URL, etc.), making every prior report from this troubleshooting session look identical even though at least three different root causes were involved (BUG-009, BUG-010, and whatever this exact report's cause was).
+- **Fix:** Set `detectSessionInUrl: false` in `createClient(...)` (`lib/supabase.ts`) so the SDK never attempts the exchange automatically at all. `auth/callback/page.tsx` now calls `supabase.auth.exchangeCodeForSession(code)` **directly and exclusively** — this is the only path that ever performs the exchange, and its return value's `error` field is the real, specific reason if it fails. Also added a `useRef` guard (`ranRef`) so React Strict Mode's dev-only double-invoke of the effect can't attempt the (single-use) exchange twice from this page's own code either.
+- **Files:** `apps/web/src/lib/supabase.ts`, `apps/web/src/app/auth/callback/page.tsx`.
+- **Lesson:** when an SDK's high-level convenience method (`getSession()`) is documented as "just works," don't assume it surfaces every error path the same way a lower-level, purpose-specific method (`exchangeCodeForSession()`) does — for anything you need real error visibility into, call the specific method, not the general one.
 
 ---
 
