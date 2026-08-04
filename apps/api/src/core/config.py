@@ -27,10 +27,15 @@ class Settings(BaseSettings):
 
     # Supabase — GitHub OAuth itself is configured in the Supabase dashboard
     # (Authentication > Providers > GitHub), not here. This app only needs to
-    # (a) verify the JWTs Supabase issues, and (b) optionally use the
+    # (a) verify the JWTs Supabase issues — via SUPABASE_URL's JWKS endpoint
+    # (core/security.py), since this project uses asymmetric ES256 signing
+    # keys, not a shared HS256 secret — and (b) optionally use the
     # service-role key for Supabase Storage (spec uploads).
     SUPABASE_URL: str = ""
     SUPABASE_SERVICE_KEY: str = ""
+    # No longer used for verification (see core/security.py) — kept as a
+    # declared field, not removed, so existing .env files with this key set
+    # don't fail Settings' extra-fields-forbidden validation on load.
     SUPABASE_JWT_SECRET: str = ""
     SUPABASE_BUCKET: str = "sprintsync-specs"
 

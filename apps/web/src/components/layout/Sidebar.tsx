@@ -9,6 +9,7 @@ import {
   CheckSquare,
   Sparkles,
   Activity,
+  GitCommit,
   Settings,
   LogOut,
 } from 'lucide-react'
@@ -34,6 +35,7 @@ export default function Sidebar({ pendingSuggestions = 0, repoId, repoName }: Si
     ? [
         { href: `/repositories/${repoId}`, label: 'Overview', icon: FolderGit2 },
         { href: `/repositories/${repoId}/tasks`, label: 'Tasks', icon: CheckSquare },
+        { href: `/repositories/${repoId}/commits`, label: 'Commits', icon: GitCommit },
         {
           href: `/repositories/${repoId}/suggestions`,
           label: 'Suggestions',

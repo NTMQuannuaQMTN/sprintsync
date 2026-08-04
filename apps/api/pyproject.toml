@@ -23,4 +23,12 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# The DB-integration tests (test_auth_integration.py) share one module-level
+# SQLAlchemy async engine (src/core/database.py) across many tests. A
+# per-test event loop (pytest-asyncio's default) leaves pooled connections
+# bound to a loop that's already closed by the time the next test runs
+# ("Task ... got Future ... attached to a different loop"). One event loop
+# for the whole session avoids that; it doesn't affect the pure-unit tests.
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
 testpaths = ["tests"]

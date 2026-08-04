@@ -1,11 +1,13 @@
-"""Execution-based test for DOCX text extraction (src/services/document_parser.py).
+"""Execution-based tests for PDF/DOCX text extraction
+(src/services/document_parser.py).
 
-Builds a real .docx in memory with python-docx (already a project dependency)
-and feeds its bytes through extract_text — no mocking. PDF extraction is not
-covered here: generating a real PDF fixture would require adding a new
-dependency (reportlab/fpdf) purely for testing, which this project's
-conventions avoid; PDF extraction remains verified by manual code trace only
-(see CHECKLIST.md SPEC-002).
+Builds real documents in memory and feeds their bytes through extract_text
+— no mocking. DOCX uses python-docx (already a dependency). PDF uses a
+hand-built minimal-but-valid PDF (raw object/xref/trailer structure written
+directly) rather than adding a PDF-generation dependency (reportlab/fpdf)
+purely for testing, which this project's conventions avoid — this exercises
+the exact same PyPDF2.PdfReader code path extract_text uses in production
+against a real, structurally valid PDF file.
 """
 import io
 
@@ -21,6 +23,42 @@ def _make_docx_bytes(paragraphs: list[str]) -> bytes:
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()
+
+
+def _make_minimal_pdf_bytes(text: str) -> bytes:
+    """Builds a minimal, structurally valid single-page PDF (correct
+    object offsets in the xref table) containing one text-drawing
+    operator. Real bytes a real PDF reader can parse — not a mock."""
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 4 0 R >> >> "
+        b"/MediaBox [0 0 612 792] /Contents 5 0 R >>",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+    stream = f"BT /F1 12 Tf 50 750 Td ({text}) Tj ET".encode("latin-1")
+    objects.append(b"<< /Length %d >>\nstream\n" % len(stream) + stream + b"\nendstream")
+
+    out = io.BytesIO()
+    out.write(b"%PDF-1.4\n")
+    offsets = [0]
+    for i, obj in enumerate(objects, start=1):
+        offsets.append(out.tell())
+        out.write(f"{i} 0 obj\n".encode())
+        out.write(obj)
+        out.write(b"\nendobj\n")
+    xref_offset = out.tell()
+    n = len(objects) + 1
+    out.write(f"xref\n0 {n}\n".encode())
+    out.write(b"0000000000 65535 f \n")
+    for off in offsets[1:]:
+        out.write(f"{off:010d} 00000 n \n".encode())
+    out.write(b"trailer\n")
+    out.write(f"<< /Size {n} /Root 1 0 R >>\n".encode())
+    out.write(b"startxref\n")
+    out.write(f"{xref_offset}\n".encode())
+    out.write(b"%%EOF")
+    return out.getvalue()
 
 
 async def test_extract_text_from_real_docx():
@@ -63,3 +101,32 @@ async def test_extract_text_unsupported_type_returns_error():
     text, error = await extract_text(b"not a real document", "text/plain", "notes.txt")
     assert text == ""
     assert "Unsupported file type" in error
+
+
+async def test_extract_text_from_real_pdf():
+    pdf_bytes = _make_minimal_pdf_bytes("Implement GitHub OAuth login")
+    text, error = await extract_text(pdf_bytes, "application/pdf", "spec.pdf")
+    assert error == ""
+    assert "Implement GitHub OAuth login" in text
+
+
+async def test_extract_text_from_pdf_feeds_ai_extraction():
+    """End-to-end: real PDF bytes -> real PyPDF2 extraction -> real AI task extraction."""
+    from src.services.ai import ai_service
+
+    pdf_bytes = _make_minimal_pdf_bytes("Implement webhook signature verification")
+    text, error = await extract_text(pdf_bytes, "application/pdf", "spec.pdf")
+    assert error == ""
+    tasks = await ai_service.extract_tasks_from_text(text, "sprintsync")
+    titles = [t.title for t in tasks]
+    assert any("webhook signature verification" in t for t in titles)
+
+
+async def test_extract_text_detects_pdf_by_extension_without_mime_type():
+    """upload_spec's MIME check has a filename-extension fallback
+    (specs.py's ALLOWED_MIME_TYPES check) — extract_text should route on
+    the filename too, not just mime_type, matching that."""
+    pdf_bytes = _make_minimal_pdf_bytes("Hello")
+    text, error = await extract_text(pdf_bytes, "application/octet-stream", "spec.pdf")
+    assert error == ""
+    assert "Hello" in text

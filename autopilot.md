@@ -261,12 +261,30 @@ Hard constraints for V1, do not violate them:
 
 ---
 
-## 7. Known Repo State (last updated 2026-08-02 evening, verify before trusting)
+## 7. Known Repo State (last updated 2026-08-04, verify before trusting)
 
 This section exists so a future autopilot iteration doesn't have to
 rediscover the same things from zero. It is a snapshot, not a guarantee —
 re-verify before acting on it, per the memory/evidence discipline above. Full
 per-item evidence lives in `CHECKLIST.md`; this is the condensed version.
+
+**As of 2026-08-04: `apps/api/.env` points at the user's real, live Supabase
+project** (`sodpgvxgrclvjawylrli`), not a local stub. The migration has been
+run against it for real (all 9 tables + the `auth.users -> profiles` trigger
++ RLS policies exist there now), a real Storage bucket (`sprintsync-specs`)
+was created, and `apps/api/tests/*_integration.py` exercise the real V1 loop
+against this same real database on every `pytest` run (with automatic
+cleanup — see conftest.py's `test_user`/`test_repo` fixtures). Two
+sandbox-specific facts worth knowing before debugging a "can't connect"
+issue on a *different* machine: (1) `DATABASE_URL` uses Supabase's
+**Transaction Pooler** (port 6543), not Session Pooler (5432) or direct
+connection, because this sandbox's egress firewall blocks 5432 — a real dev
+machine likely doesn't have that restriction and could use a different
+pooler mode, but `core/database.py`'s `NullPool` +
+`prepared_statement_name_func=lambda: ""` fix is needed by *any* transaction-mode
+PgBouncer setup, so don't remove it without checking. (2) JWT verification is
+via Supabase's JWKS endpoint (ES256), not a shared secret — see BUG-012 for
+why, and don't reintroduce `SUPABASE_JWT_SECRET`-based verification.
 
 **Fixed as of the 2026-08-02 pass** (see `CHECKLIST.md` for evidence on each):
 - The Express mock server is gone; `apps/api/package.json` now runs the real

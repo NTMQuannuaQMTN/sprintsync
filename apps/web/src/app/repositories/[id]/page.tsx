@@ -7,7 +7,7 @@ import {
   GitCommit, Upload, ArrowRight, Lock
 } from 'lucide-react'
 import Link from 'next/link'
-import { reposApi, tasksApi, suggestionsApi, specsApi } from '@/lib/api'
+import { reposApi, tasksApi, suggestionsApi, specsApi, commitsApi } from '@/lib/api'
 import { SkeletonCard } from '@/components/ui/Skeleton'
 import { StatusBadge } from '@/components/ui/StatusBadge'
 import { ConfidenceBadge } from '@/components/ui/ConfidenceBar'
@@ -58,6 +58,12 @@ export default function RepositoryDetailPage() {
   const { data: specs } = useQuery({
     queryKey: ['specs', id],
     queryFn: () => specsApi.list(id),
+    enabled: !!id,
+  })
+
+  const { data: commits } = useQuery({
+    queryKey: ['commits', id],
+    queryFn: () => commitsApi.list(id, 3),
     enabled: !!id,
   })
 
@@ -208,6 +214,35 @@ export default function RepositoryDetailPage() {
                     </div>
                   </div>
                 )}
+
+                {/* Recent commits */}
+                <div className="bg-white border border-gray-100 rounded-xl">
+                  <div className="flex items-center justify-between px-4 py-3 border-b border-gray-50">
+                    <span className="text-sm font-semibold text-gray-900 flex items-center gap-2">
+                      <GitCommit className="w-3.5 h-3.5 text-gray-400" />
+                      Recent Commits
+                    </span>
+                    <Link href={`/repositories/${id}/commits`} className="text-xs text-[#0F62FE] hover:underline">
+                      View all
+                    </Link>
+                  </div>
+                  {(commits?.length ?? 0) === 0 ? (
+                    <p className="px-4 py-6 text-xs text-gray-400 text-center">No commits yet</p>
+                  ) : (
+                    <div className="divide-y divide-gray-50">
+                      {commits?.map((c) => (
+                        <div key={c.id} className="px-4 py-3">
+                          <p className="text-xs text-gray-700 truncate">{c.message}</p>
+                          <div className="flex items-center gap-1.5 mt-1">
+                            <code className="text-[10px] font-mono text-gray-400">{c.short_sha}</code>
+                            <span className="text-[10px] text-gray-300">·</span>
+                            <span className="text-[10px] text-gray-400">{c.changed_files} file{c.changed_files === 1 ? '' : 's'}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           </>

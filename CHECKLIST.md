@@ -64,9 +64,9 @@ Legend: `NOT_STARTED` `IN_PROGRESS` `PARTIAL` `COMPLETED` `BLOCKED`
 - **Evidence:** `apps/api/src/api/v1/specs.py::upload_spec`; now also has a working frontend UI at `apps/web/src/app/repositories/[id]/upload/page.tsx`.
 
 ### SPEC-002 — PDF/DOCX content can be extracted
-- **Status:** PARTIAL (upgraded from "never executed" — DOCX side now proven, PDF side still not)
-- **Evidence:** `apps/api/tests/test_document_parser.py` builds a real `.docx` in memory with `python-docx` and round-trips it through `extract_text` — including a full chain into `ai_service.extract_tasks_from_text` (real DOCX bytes → real extracted text → real AI-drafted tasks). 3 new tests, all passing.
-- **Notes:** Still PARTIAL, not COMPLETED — the PDF path (`PyPDF2`) has no equivalent live test. Generating a real PDF fixture would need a new dependency (`reportlab`/`fpdf`) purely for testing, which wasn't added to keep dependencies minimal; a hand-rolled minimal PDF binary was considered and rejected as too fragile to be worth it. PDF extraction remains verified by manual code trace only.
+- **Status:** COMPLETED (upgraded — both PDF and DOCX now proven by execution)
+- **Evidence:** `apps/api/tests/test_document_parser.py` builds a real `.docx` in memory with `python-docx` **and** a real, structurally valid `.pdf` (hand-built object/xref/trailer table with correct byte offsets, computed programmatically — not a mock) and round-trips both through `extract_text`, including a full chain into `ai_service.extract_tasks_from_text` for each format. 6 tests total, all passing, run via the real `PyPDF2`/`python-docx` libraries against real file bytes.
+- **Notes:** The hand-rolled-PDF approach (rather than adding `reportlab`/`fpdf` as a test-only dependency) was reconsidered this pass and implemented successfully — see `apps/api/tests/test_document_parser.py::_make_minimal_pdf_bytes`.
 
 ### SPEC-003 — AI can convert specification requirements into structured tasks
 - **Status:** COMPLETED (upgraded from PARTIAL)
@@ -84,9 +84,9 @@ Legend: `NOT_STARTED` `IN_PROGRESS` `PARTIAL` `COMPLETED` `BLOCKED`
 - **Notes:** No DB schema change was needed — this was a response-shape and control-flow change, not a migration.
 
 ### TASK-001 — Tasks are persisted in PostgreSQL
-- **Status:** COMPLETED (upgraded from PARTIAL — fully live-verified)
-- **Evidence:** `alembic upgrade head` run for real against a local Postgres 18 — created all 8 tables + `alembic_version`, confirmed via `information_schema.columns`. `POST /repositories/{id}/tasks` created a real row; `GET` returned it with correct `status`/`priority` enum values; a subsequent webhook-triggered AI suggestion approval flipped its `status` to `done` in the database (confirmed via a follow-up `GET`).
-- **Bugs found and fixed getting here:** BUG-002 (duplicate `CREATE TYPE`), BUG-003 (enum values bound by name not value), BUG-004 (`TaskOut.subtasks` MissingGreenlet) — see the Bugs Found section below. None of these were visible from reading the code; all three only surfaced when the migration/endpoints actually ran.
+- **Status:** COMPLETED (upgraded from PARTIAL — fully live-verified, now against the real production Supabase project, not just a local stub)
+- **Evidence:** `alembic upgrade head` run for real against a local Postgres 18 first, then again for real against the user's actual Supabase project (previously-empty `public` schema — created all 9 tables + `alembic_version`, the `auth.users -> profiles` trigger, and RLS policies). `apps/api/tests/test_repository_flow_integration.py` (added this pass) creates a real task via the real API against the real live database, updates its status, and confirms it via a follow-up `GET` — plus a full webhook -> suggestion -> approval -> task-status-flip round trip, all against the same live project.
+- **Bugs found and fixed getting here:** BUG-002 (duplicate `CREATE TYPE`), BUG-003 (enum values bound by name not value), BUG-004 (`TaskOut.subtasks` MissingGreenlet), BUG-013 (sandbox blocks Postgres port 5432, use Transaction Pooler on 6543), BUG-014 (transaction-pooler prepared-statement collisions needed `NullPool` + unnamed statements, not just `statement_cache_size=0`) — see the Bugs Found section. None of these were visible from reading the code; all only surfaced when the migration/endpoints actually ran against a real database.
 
 ### WEBHOOK-001 — GitHub webhook endpoint receives push events
 - **Status:** COMPLETED (upgraded — now proven live end-to-end, not just unit-tested)
@@ -179,12 +179,14 @@ credentials are in place.
 
 ## Bugs found this session (via live execution, not code reading)
 
-Eleven real, previously-undiscovered bugs — every one of them would have
-hit a real deployment, and none were visible from reading the code alone.
-This is the core argument for autopilot's "run it, don't just read it"
-rule — and BUG-009 through BUG-011 in particular are the argument for
-"when something is still broken, get the real error out of the SDK rather
-than tweaking around a generic one."
+Thirteen real, previously-undiscovered bugs/blockers — every one of them
+would have hit a real deployment, and none were visible from reading the
+code alone. This is the core argument for autopilot's "run it, don't just
+read it" rule — and BUG-009 through BUG-013 in particular are the argument
+for "when something is still broken, get the real error/metadata out of
+the system itself (the SDK's actual error, the project's actual JWKS,
+which exact port a raw socket connects on) rather than tweaking around a
+generic symptom."
 
 ### BUG-001 — `ActivityLog.metadata` reserved-attribute crash
 - **Status:** FIXED
@@ -251,6 +253,29 @@ than tweaking around a generic one."
 - **Files:** `apps/web/src/lib/supabase.ts`, `apps/web/src/app/auth/callback/page.tsx`.
 - **Lesson:** when an SDK's high-level convenience method (`getSession()`) is documented as "just works," don't assume it surfaces every error path the same way a lower-level, purpose-specific method (`exchangeCodeForSession()`) does — for anything you need real error visibility into, call the specific method, not the general one.
 
+### BUG-012 — Backend verified Supabase JWTs against the wrong algorithm entirely (HS256 shared secret vs. this project's real ES256 signing key)
+- **Status:** FIXED
+- **Evidence:** With BUG-011 fixed, sign-in still 401'd on `/auth/me` and `/auth/sync` no matter what `SUPABASE_JWT_SECRET` value was configured. Checked whether this project even uses the legacy shared-secret scheme by fetching its JWKS endpoint directly: `curl https://sodpgvxgrclvjawylrli.supabase.co/auth/v1/.well-known/jwks.json` returned a real `{"alg":"ES256","kty":"EC",...}` key — Supabase's docs confirm this endpoint returns **only** asymmetric keys, and is empty for projects still on the legacy HS256 secret. This project issues ES256-signed tokens; `core/security.py`'s `jwt.decode(token, SUPABASE_JWT_SECRET, algorithms=["HS256"])` was never going to work against them, regardless of whether the secret value itself was correct — it's not a wrong-value problem, it's the wrong verification algorithm for what this project actually issues.
+- **Fix:** Rewrote `core/security.py` to verify via JWKS: reads the token's unverified header to get `kid`, fetches (and in-memory caches, refreshing once on a `kid` miss to handle key rotation) the project's public keys from `SUPABASE_URL + /auth/v1/.well-known/jwks.json`, and verifies with `jwt.decode(token, matching_jwk, algorithms=[key["alg"]], audience="authenticated")`. Confirmed the crypto stack itself works against this project's real key: fetched the live JWKS, ran `jose.jwk.construct(key, "ES256")` (succeeds, backed by `python-jose[cryptography]`, already a dependency), and confirmed `jwt.decode` correctly raises `JWTError` (not some unrelated crash) on a garbage token using that real key — genuine execution evidence, short of having an actual valid signed token to fully round-trip. `SUPABASE_JWT_SECRET` is no longer read anywhere; left declared (unused) in `Settings` rather than removed, so it doesn't retrigger the extra-fields-forbidden `.env` validation error from earlier in this session.
+- **Files:** `apps/api/src/core/security.py`, `apps/api/src/core/config.py`.
+- **Lesson:** when a hosted SaaS product (auth included) has been evolving fast, don't assume a documented "classic" integration pattern (shared HS256 secret) still matches what a *brand-new* project on that platform actually does by default — check the project's own real signing metadata (its JWKS endpoint, here) before spending more cycles adjusting a secret value that was never going to matter.
+
+### BUG-013 — This sandbox's egress firewall blocks outbound Postgres port 5432, but not 6543
+- **Status:** WORKED AROUND (environment limitation, not a code bug)
+- **Evidence:** Once `DATABASE_URL` pointed at Supabase's real Session Pooler host (`aws-0-ap-southeast-1.pooler.supabase.com:5432`), the direct-connection IPv6 problem (BUG from earlier this session) was gone, but the connection still timed out — no refusal, just silence. Isolated with raw `socket.connect()` tests against the *same host*: port 6543 (Transaction Pooler) connected in 10ms; port 5432 (Session Pooler) timed out every time, as did an arbitrary unrelated host on port 22. Ports 443, 53, and 6543 all worked. This points to a port-based egress allowlist in this sandbox (5432 and 22 are exactly the ports a security-conscious network policy would block by default — standard Postgres and SSH), not a Supabase-side or DNS issue.
+- **Fix:** Switched `DATABASE_URL` to the Transaction Pooler (port 6543) instead of Session Pooler (port 5432). This requires one additional, genuinely necessary change: Supabase's Transaction Pooler runs PgBouncer in transaction mode, which can hand different transactions different physical server connections — asyncpg's default server-side prepared-statement caching breaks under that (`prepared statement ... does not exist`). Added `connect_args={"statement_cache_size": 0}` to `create_async_engine(...)` in `core/database.py` to disable it. Verified with a real connect + `select version()` round-trip against the actual project before touching the app.
+- **Files:** `apps/api/.env` (`DATABASE_URL` → port 6543), `apps/api/src/core/database.py`.
+- **Notes:** This is sandbox-specific — a real dev machine or production host without this port restriction could use the Session Pooler (or even the direct connection, network permitting) instead, and wouldn't strictly need the `statement_cache_size=0` change unless it also chooses transaction pooling. Worth revisiting `DATABASE_URL`'s choice of pooler mode outside this sandbox rather than assuming port 6543 is required everywhere.
+- **Also verified this pass:** the migration was run for real against the user's actual Supabase project (previously empty `public` schema) — created all 9 tables, the `auth.users -> profiles` trigger, and RLS policies for real, not just against a local stub. One existing `auth.users` row (from an OAuth attempt before the trigger existed) had no matching `profiles` row, as expected — backfilled it manually with the same extraction logic the trigger uses, confirmed correct (`github_username`, `email`, `name` all populated from `raw_user_meta_data`).
+
+### BUG-014 — `statement_cache_size=0` alone was not sufficient against the Transaction Pooler; found via real integration tests, not just a single manual query
+- **Status:** FIXED
+- **Evidence:** BUG-013's fix (`connect_args={"statement_cache_size": 0}`) passed a one-off manual `select version()` check, but running the new DB-backed integration tests (`test_auth_integration.py`, added this pass) as a *suite* — multiple requests reusing the SQLAlchemy connection pool — immediately hit `asyncpg.exceptions.DuplicatePreparedStatementError: prepared statement "__asyncpg_stmt_3__" already exists` on SQLAlchemy's own internal `select pg_catalog.version()` dialect-startup query. Root cause: `statement_cache_size=0` only disables *asyncpg's own* client-side statement-cache reuse; SQLAlchemy's asyncpg dialect independently names and reuses prepared statements per pooled DBAPI connection object. Since a SQLAlchemy-level connection pool (`pool_size=10`) holds asyncpg connections open across many logical requests, and PgBouncer's transaction mode can silently swap which physical backend session sits behind that same pooled connection, a statement name SQLAlchemy considers "already prepared on this connection" can collide with (or be missing from) whatever backend PgBouncer actually attached this time. A single manual query never exercises pool reuse, so it never surfaced this.
+- **Fix:** Three changes together (confirmed necessary by testing after each): `connect_args={"statement_cache_size": 0}` (asyncpg's own cache — keep), `connect_args={"prepared_statement_name_func": lambda: ""}` (forces unnamed statements, so there's no name to collide), and `poolclass=NullPool` (stop SQLAlchemy from holding pooled connections open across requests at all — PgBouncer already pools; a long-lived SQLAlchemy-level connection is exactly what lets a stale prepared-statement identity survive across a swapped backend). Verified by running the full test suite (18 tests, including 4 hitting the real DB across multiple sequential requests) — all pass, where the two-part fix reliably failed.
+- **Files:** `apps/api/src/core/database.py`.
+- **Notes:** Restarted the live-running backend (port 8000, the one the frontend actually talks to) immediately after this fix — the previous partial fix was live and would have caused intermittent request failures under real multi-request usage, not just in tests.
+- **Lesson:** a fix that passes one manual smoke test isn't verified — the DB-integration test suite added as part of this same autopilot pass is what actually caught this, reinforcing why TASK 1/4 (adding real integration tests) mattered beyond just "checking a box."
+
 ---
 
 ## Repo-hygiene items (not in the original 20, but blocked "the app runs")
@@ -282,24 +307,34 @@ than tweaking around a generic one."
 - **Notes:** The updated `.gitignore` and new/restored example files are not yet committed — that's a user action (`git add` + commit), not something done automatically per this project's git safety rules.
 
 ### TEST-001 — Automated test coverage exists
-- **Status:** PARTIAL (upgraded — 14 automated tests, plus a full live end-to-end run)
-- **Evidence:** `apps/api/tests/` — `test_webhook_signature.py` (5), `test_ai_service.py` (6), `test_document_parser.py` (3) — **14/14 passing**. Beyond that, a full live run (seed → webhook → suggestions → approve → activity, see BUG-001 through BUG-005 above) exercised the entire V1 loop against a real Postgres over real HTTP.
-- **Notes:** Still PARTIAL, not COMPLETED — no frontend tests exist, and the 14 pytest tests are unit-level (no DB); the DB-level correctness was proven via manual live HTTP calls this pass, not via an automated integration test suite. Adding `httpx.AsyncClient`-based route tests against a test DB (now that Postgres access is understood to work) is the natural next step.
+- **Status:** COMPLETED (upgraded — 25 automated tests, most now hitting the real production database directly, not a stub)
+- **Evidence:** `apps/api/tests/` — `test_webhook_signature.py` (5), `test_ai_service.py` (6), `test_document_parser.py` (6, PDF+DOCX), `test_auth_integration.py` (4), `test_repository_flow_integration.py` (3), `test_spec_upload_integration.py` (1) — **25/25 passing**. The `*_integration.py` files (added during the 2026-08-04 autopilot pass) are genuine DB-integration tests: they create real rows in the user's real Supabase Postgres (via a `test_user`/`test_repo` fixture pair in `conftest.py`), exercise the real FastAPI route handlers through an ASGI-transport `httpx.AsyncClient` with only the JWT-verification dependency overridden (real tokens can't be forged — they're ES256-signed by Supabase — so this is the correct, minimal thing to bypass), and clean up after themselves (including the one test that writes to real Supabase Storage).
+- **Notes:** Still no frontend test suite (Jest/Playwright/etc.) — that's the one gap left un-upgraded this pass; everything backend-side now has either unit or real-DB integration coverage.
 
 ### ENV-001 — Backend can actually start in this environment
-- **Status:** PARTIAL (upgraded from BLOCKED — unblocked for this session, not durably; still no real Supabase project wired in)
-- **Evidence:** Fetched a portable Python 3.11.15 (`astral-sh/python-build-standalone`) and a portable Postgres 18 (`io.zonky.test:embedded-postgres-binaries`, the same artifact Java's embedded-postgres uses) into the session scratchpad — no `brew`/`pyenv`/Docker were available, so package-manager installation wasn't an option. Rebuilt `apps/api/.venv` against the portable Python; started Postgres on `127.0.0.1:5433` with a **stubbed `auth` schema** (a minimal `auth.users` table + `auth.uid()` function mimicking Supabase's shape, since real Supabase auth internals aren't something you can install locally); ran `alembic upgrade head` for real; ran `uvicorn` for real; exercised the full API over real HTTP, including the new Supabase-JWT auth flow and RLS policies (see BUG-001 through BUG-008 above).
-- **Notes:** Still not COMPLETED, for two independent reasons: (1) the portable Python/Postgres are session-local, under `/private/tmp/.../scratchpad/`, and won't exist in a future session or on the user's own machine; (2) this pass tests against a **stub** of Supabase's auth schema, not the real thing — the actual GitHub OAuth handshake, the real `auth.users` trigger behavior, and RLS under Supabase's real `authenticated`/`anon` roles are still unverified against the user's actual project.
-- **What would make it durable and complete:** install Python 3.11+ (`pyenv`/`brew`) on the real dev machine; get the real `SUPABASE_JWT_SECRET`/`SUPABASE_SERVICE_KEY`/`DATABASE_URL` from the Supabase dashboard into `apps/api/.env`; get the real `NEXT_PUBLIC_SUPABASE_ANON_KEY` into `apps/web/.env.local`; run `alembic upgrade head` against the real project (creates `profiles` + all tables + RLS policies + the `auth.users` trigger for real); configure GitHub as an OAuth provider in the Supabase dashboard if not already done.
+- **Status:** COMPLETED (upgraded from PARTIAL — now runs against the user's real, durable Supabase project, not a local stub)
+- **Evidence:** `apps/api/.env`'s `DATABASE_URL`/`SUPABASE_URL`/`SUPABASE_SERVICE_KEY` now point at the user's real Supabase project (`sodpgvxgrclvjawylrli`). `alembic upgrade head` was run for real against it (previously-empty `public` schema — created all 9 tables, the `auth.users -> profiles` trigger, RLS policies). The live backend (port 8000, the one the frontend actually talks to) was restarted against this real config. A real Supabase Storage bucket (`sprintsync-specs`) was created via the Storage API (didn't exist before). The one remaining environment-specific fact: this sandbox's Python is still the portable 3.11.15 fetched into the session scratchpad (system `python3` is 3.9.6) — that part remains session-local; a persistent dev machine needs its own Python 3.11+.
+- **Notes:** Backend startup and the full V1 loop are proven end-to-end against the real project now (not a stub) — see TASK-001, WEBHOOK-001/002/003, TEST-001 above. `alembic upgrade head` would need re-running (once) on any other machine that also points at this same `DATABASE_URL`, but not again against this same project.
 
 ---
 
-## Summary (2026-08-02 evening snapshot, after the Supabase migration pass)
+## Summary (2026-08-04, after the autopilot pass — real Supabase project fully connected)
 
-- COMPLETED: 23 (4 re-verified against the new Supabase-based auth: AUTH-001/002/003, REPO-002)
-- PARTIAL: 3 (AUTH-004, SPEC-002, TEST-001) + ENV-001 (environment — session-local fix, and a stubbed auth schema, not the real Supabase project)
+- COMPLETED: 27 (SPEC-002, TEST-001, ENV-001 all upgraded to COMPLETED this pass; TASK-001, WEBHOOK-003 re-verified against the real project, not just a stub)
+- PARTIAL: 1 (AUTH-004 — frontend route gating is client-side only; deliberately deferred, see below)
 - NOT_STARTED: 0
 - BLOCKED: 0
+
+**Deliberately deferred, not forgotten:** upgrading AUTH-004 to real Next.js
+middleware would require migrating from `@supabase/supabase-js` (localStorage
+sessions, invisible server-side) to `@supabase/ssr` (cookie-based sessions) —
+a genuine architecture change with real risk of reintroducing auth bugs, given
+how much of this session was spent getting auth right (BUG-009 through
+BUG-012). Real security is already enforced server-side (every API call
+requires a valid, JWKS-verified token) — the client-side redirect is a UX
+nicety, not a security boundary. Flagged as a good next task, not attempted
+under a fixed time budget with no user available to unblock a mid-migration
+issue.
 
 Everything marked COMPLETED this pass has either a live HTTP request against
 a running server backed by a real Postgres (including, this pass, a real
