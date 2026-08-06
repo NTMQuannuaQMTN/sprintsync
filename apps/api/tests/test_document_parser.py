@@ -122,6 +122,26 @@ async def test_extract_text_from_pdf_feeds_ai_extraction():
     assert any("webhook signature verification" in t for t in titles)
 
 
+async def test_reflow_recovers_lines_from_pypdf2_word_per_line_fragmentation():
+    """Regression for a real user upload: PyPDF2 extracted this Vietnamese PDF
+    with one word per line (a single blank line as the word-gap artifact,
+    two-or-more blank lines marking a genuine line break) — verbatim
+    excerpt of the actual `extracted_text` pulled from the database for
+    that upload. Every line-anchored heuristic in ai.py saw single words
+    and matched nothing, silently falling back to the generic task."""
+    from src.services.document_parser import _reflow_fragmented_pdf_text
+
+    fragmented = (
+        "Cần\n \ncó\n \ntính\n \nnăng\n \ntạo\n \nmục\n \nđể\n \nquản\n \nlý\n \ncho\n \ndễ.\n"
+        " \n \n \n"
+        "Up\n \nlại\n \nảnh\n \n2\n \nbọn\n \nt\n"
+    )
+    reflowed = _reflow_fragmented_pdf_text(fragmented)
+    lines = reflowed.split("\n")
+    assert lines[0] == "Cần có tính năng tạo mục để quản lý cho dễ."
+    assert lines[1] == "Up lại ảnh 2 bọn t"
+
+
 async def test_extract_text_detects_pdf_by_extension_without_mime_type():
     """upload_spec's MIME check has a filename-extension fallback
     (specs.py's ALLOWED_MIME_TYPES check) — extract_text should route on

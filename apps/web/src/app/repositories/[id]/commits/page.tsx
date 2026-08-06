@@ -2,8 +2,8 @@
 
 import { useState } from 'react'
 import { useParams } from 'next/navigation'
-import { useQuery } from '@tanstack/react-query'
-import { GitCommit, ChevronDown, ChevronRight, FileDiff } from 'lucide-react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { GitCommit, ChevronDown, ChevronRight, FileDiff, Sparkles, Loader2 } from 'lucide-react'
 import { reposApi, commitsApi } from '@/lib/api'
 import { SkeletonRow } from '@/components/ui/Skeleton'
 import EmptyState from '@/components/ui/EmptyState'
@@ -101,6 +101,7 @@ function CommitRow({ commit }: { commit: CommitDetail }) {
 
 export default function RepoCommitsPage() {
   const { id } = useParams<{ id: string }>()
+  const queryClient = useQueryClient()
 
   const { data: repo } = useQuery({
     queryKey: ['repo', id],
@@ -114,9 +115,52 @@ export default function RepoCommitsPage() {
     enabled: !!id,
   })
 
+  const analyzeMutation = useMutation({
+    mutationFn: () => commitsApi.analyze(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['commits', id] })
+      queryClient.invalidateQueries({ queryKey: ['suggestions', id] })
+    },
+  })
+
+  const headerActions = (
+    <button
+      onClick={() => analyzeMutation.mutate()}
+      disabled={analyzeMutation.isPending}
+      className="flex items-center gap-1.5 px-3 py-1.5 bg-[#0F62FE] text-white text-xs rounded-lg hover:bg-blue-700 transition-colors font-medium disabled:opacity-50"
+    >
+      {analyzeMutation.isPending ? (
+        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+      ) : (
+        <Sparkles className="w-3.5 h-3.5" />
+      )}
+      Update to tasks
+    </button>
+  )
+
   return (
-    <AppShell headerTitle="Commits" repoId={id} repoName={repo?.name}>
+    <AppShell headerTitle="Commits" repoId={id} repoName={repo?.name} headerActions={headerActions}>
       <div className="p-6 max-w-4xl mx-auto fade-in">
+        {analyzeMutation.isSuccess && (
+          <div className="mb-4 px-4 py-3 bg-blue-50 border border-blue-100 rounded-lg text-sm text-blue-800">
+            {analyzeMutation.data.commits_processed === 0
+              ? 'Nothing new to analyze — every commit has already been reviewed.'
+              : `Reviewed ${analyzeMutation.data.commits_processed} commit${analyzeMutation.data.commits_processed === 1 ? '' : 's'} and created ${analyzeMutation.data.suggestions_created} suggestion${analyzeMutation.data.suggestions_created === 1 ? '' : 's'} for review.`}
+            {analyzeMutation.data.suggestions_created > 0 && (
+              <>
+                {' '}
+                <a href={`/repositories/${id}/suggestions`} className="underline font-medium">
+                  Review suggestions
+                </a>
+              </>
+            )}
+          </div>
+        )}
+        {analyzeMutation.isError && (
+          <div className="mb-4 px-4 py-3 bg-rose-50 border border-rose-100 rounded-lg text-sm text-rose-700">
+            {(analyzeMutation.error as Error).message || 'Could not analyze commits'}
+          </div>
+        )}
         <div className="bg-white border border-gray-100 rounded-xl">
           <div className="px-5 py-4 border-b border-gray-50">
             <span className="text-sm font-semibold text-gray-900">

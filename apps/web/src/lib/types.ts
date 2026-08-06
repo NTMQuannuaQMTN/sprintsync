@@ -154,6 +154,11 @@ export interface CommitDetail extends Commit {
   analyzed: boolean
 }
 
+export interface CommitAnalyzeResult {
+  commits_processed: number
+  suggestions_created: number
+}
+
 export interface ActivityItem {
   id: string
   event_type: string

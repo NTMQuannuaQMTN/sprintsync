@@ -132,6 +132,11 @@ async def github_webhook(
                 files_changed=all_files,
             )
             db.add(commit)
+            # Sessions here use autoflush=False, and commit.id is a
+            # client-side default (uuid.uuid4) that SQLAlchemy only
+            # populates on flush — without this, the commit_id set on the
+            # Suggestion below would still be None at this point.
+            await db.flush()
 
             # Get open tasks for this repo
             tasks_result = await db.execute(
@@ -155,6 +160,7 @@ async def github_webhook(
                 suggestion = Suggestion(
                     repository_id=repo.id,
                     task_id=s["task_id"],
+                    commit_id=commit.id,
                     action=SuggestionAction.STATUS_CHANGE,
                     proposed_status=s["proposed_status"],
                     explanation=s["explanation"],
@@ -163,6 +169,11 @@ async def github_webhook(
                 )
                 db.add(suggestion)
                 new_suggestions += 1
+
+            # This commit has already been run through analyze_commit above —
+            # mark it so the "Update to tasks" bulk-analyze endpoint
+            # (commits.py) doesn't re-process it and duplicate suggestions.
+            commit.analyzed = True
 
             # Activity log
             db.add(ActivityLog(

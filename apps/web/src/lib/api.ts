@@ -18,6 +18,7 @@ import type {
   DashboardData,
   ActivityItem,
   CommitDetail,
+  CommitAnalyzeResult,
 } from './types'
 
 const BASE = '/api/v1'
@@ -179,4 +180,6 @@ export const commitsApi = {
     request<CommitDetail[]>(`/repositories/${repoId}/commits?limit=${limit}`),
   get: (repoId: string, commitId: string) =>
     request<CommitDetail>(`/repositories/${repoId}/commits/${commitId}`),
+  analyze: (repoId: string) =>
+    request<CommitAnalyzeResult>(`/repositories/${repoId}/commits/analyze`, { method: 'POST' }),
 }

@@ -13,6 +13,11 @@ class CommitFile(BaseModel):
     patch: Optional[str] = None
 
 
+class CommitAnalyzeResult(BaseModel):
+    commits_processed: int
+    suggestions_created: int
+
+
 class CommitOut(BaseModel):
     id: uuid.UUID
     repository_id: uuid.UUID

@@ -23,17 +23,43 @@ class AIService:
         # Heuristic patterns for common spec document structures
         lines = [line.strip() for line in text.split("\n") if line.strip()]
 
-        # Pattern 1: numbered/bulleted items that look like tasks
         task_patterns = [
-            r"^(\d+\.|\-|\*|\•)\s+(.+)$",  # numbered or bulleted
+            r"^(\d+\.|\-|\*|\•)\s*(.+)$",  # numbered or bulleted (space after marker optional, e.g. "*BONUS:")
+            r"^(=>)\s*(.+)$",  # arrow-prefixed action lines ("=> Tính năng import ...")
             r"^(Implement|Build|Create|Add|Integrate|Setup|Configure|Design|Develop|Fix|Refactor)\s+(.+)$",
+            # Common Vietnamese task/action verbs (feedback docs are often written in Vietnamese,
+            # imperative, with no consistent bullet/heading structure).
+            r"^(Thêm|Đổi|Cần|Tạo|Sửa|Nâng cấp|Cải thiện|Chỉnh|Xóa|Bỏ|Up|Des)\s+(.+)$",
             r"^(Feature|Task|Story|Epic|Requirement):\s*(.+)$",
             r"^##?\s+(.+)$",  # Markdown headings as tasks
         ]
 
         seen = set()
+        # A line that is just "=>" on its own (no trailing content) means the
+        # actual instruction is the *next* line — promote it even if it
+        # doesn't match any pattern above.
+        promote_next = False
         for line in lines:
+            if line == "=>":
+                promote_next = True
+                continue
+
             if len(line) < 10 or len(line) > 300:
+                promote_next = False
+                continue
+
+            if promote_next:
+                title = line.strip()
+                if title and title not in seen and len(title) > 5:
+                    seen.add(title)
+                    tasks.append(TaskCreate(
+                        title=title,
+                        description=None,
+                        status=TaskStatus.TODO,
+                        priority=self._infer_priority(title),
+                        ai_tags=self._extract_tags(title),
+                    ))
+                promote_next = False
                 continue
 
             for pattern in task_patterns:

@@ -5,6 +5,48 @@ forged token, and test_auth_integration.py for the equivalent on the auth
 endpoints.
 """
 import uuid
+from datetime import datetime, timezone
+
+import asyncpg
+
+from src.core.config import settings
+
+
+def _asyncpg_dsn() -> str:
+    return settings.DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://")
+
+
+async def _insert_commit(repo_id, message: str) -> uuid.UUID:
+    """Inserts a real, never-analyzed commit row directly — simulating one
+    that arrived before the "Update to tasks" bulk-analyze endpoint existed
+    (or before a webhook was installed), as opposed to test_webhook_creates_
+    commit_and_suggestion_then_approve_flow below, which goes through the
+    real webhook handler that analyzes+marks commits inline."""
+    conn = await asyncpg.connect(_asyncpg_dsn(), statement_cache_size=0)
+    commit_id = uuid.uuid4()
+    sha = uuid.uuid4().hex
+    try:
+        await conn.execute(
+            """
+            INSERT INTO public.commits
+                (id, repository_id, sha, short_sha, message, author_name,
+                 author_email, committed_at, html_url, branch)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            """,
+            commit_id,
+            repo_id,
+            sha,
+            sha[:7],
+            message,
+            "pytest",
+            "pytest@example.invalid",
+            datetime.now(timezone.utc),
+            f"https://github.com/pytest-org/{repo_id}/commit/{sha}",
+            "main",
+        )
+    finally:
+        await conn.close()
+    return commit_id
 
 
 async def test_create_list_update_task(client, test_repo):
@@ -107,6 +149,9 @@ async def test_webhook_creates_commit_and_suggestion_then_approve_flow(client, t
     suggestion = matching[0]
     assert suggestion["evidence"] is not None
     assert suggestion["confidence_score"] > 0
+    # Guards the webhook.py fix that sets Suggestion.commit_id — without it
+    # this enriched field silently stays null (see suggestions.py _enrich).
+    assert suggestion["commit_sha"] is not None
 
     approve = await client.post(
         f"/api/v1/repositories/{test_repo}/suggestions/{suggestion['id']}/approve",
@@ -123,3 +168,42 @@ async def test_webhook_creates_commit_and_suggestion_then_approve_flow(client, t
     assert "commit_received" in event_types
     assert "suggestion_created" in event_types
     assert "suggestion_approved" in event_types
+
+
+async def test_update_to_tasks_button_analyzes_unanalyzed_commits(client, test_repo):
+    """Exercises the "Update to tasks" button's backend: POST .../commits/
+    analyze should pick up a real, never-analyzed commit row (simulating one
+    that predates this feature, or arrived without a webhook), match it
+    against a real open task via the same heuristic the webhook uses, and
+    file a pending suggestion — without ever flipping the task's status
+    itself (that still requires an explicit approve, per suggestions.py)."""
+    task_resp = await client.post(
+        f"/api/v1/repositories/{test_repo}/tasks",
+        json={"title": "Implement rate limiting for the API", "priority": "high"},
+    )
+    task_id = task_resp.json()["id"]
+
+    await _insert_commit(test_repo, "Implement rate limiting for the API")
+
+    analyze = await client.post(f"/api/v1/repositories/{test_repo}/commits/analyze")
+    assert analyze.status_code == 200, analyze.text
+    body = analyze.json()
+    assert body["commits_processed"] == 1
+    assert body["suggestions_created"] >= 1
+
+    suggestions = await client.get(
+        f"/api/v1/repositories/{test_repo}/suggestions", params={"status": "pending"}
+    )
+    matching = [s for s in suggestions.json() if s["task_id"] == task_id]
+    assert matching, "expected the bulk-analyze endpoint to suggest a status change"
+    assert matching[0]["commit_sha"] is not None
+
+    # Task status is untouched until a human approves — this endpoint only
+    # ever creates suggestions, it never mutates tasks directly.
+    task_after = await client.get(f"/api/v1/repositories/{test_repo}/tasks/{task_id}")
+    assert task_after.json()["status"] == "todo"
+
+    # Calling it again must not re-process the same (now-analyzed) commit —
+    # otherwise every click of "Update to tasks" would duplicate suggestions.
+    analyze_again = await client.post(f"/api/v1/repositories/{test_repo}/commits/analyze")
+    assert analyze_again.json() == {"commits_processed": 0, "suggestions_created": 0}
