@@ -207,3 +207,20 @@ async def test_update_to_tasks_button_analyzes_unanalyzed_commits(client, test_r
     # otherwise every click of "Update to tasks" would duplicate suggestions.
     analyze_again = await client.post(f"/api/v1/repositories/{test_repo}/commits/analyze")
     assert analyze_again.json() == {"commits_processed": 0, "suggestions_created": 0}
+
+
+async def test_list_commits_still_returns_locally_stored_commits_without_a_github_token(
+    client, test_repo
+):
+    """GET /commits now also tries to backfill from the real GitHub API
+    (_sync_commits_from_github in commits.py) — but test_repo's owning
+    profile has no github_access_token (the trigger-created default), which
+    is also the real-world state for most freshly-connected repos before a
+    user's token round-trips through /auth/sync. That path must degrade to
+    a no-op, not break the listing of whatever's already stored locally."""
+    await _insert_commit(test_repo, "Existing commit stored before any sync")
+
+    listed = await client.get(f"/api/v1/repositories/{test_repo}/commits")
+    assert listed.status_code == 200
+    messages = [c["message"] for c in listed.json()]
+    assert "Existing commit stored before any sync" in messages

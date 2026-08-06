@@ -1,5 +1,7 @@
 """Commit list/detail endpoints — exposes stored diff/changed-file data."""
+import asyncio
 import uuid
+from datetime import datetime, timezone
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -13,8 +15,10 @@ from src.models.commit import Commit
 from src.models.task import Task, TaskStatus
 from src.models.suggestion import Suggestion, SuggestionAction
 from src.models.activity_log import ActivityLog, ActivityType
+from src.models.profile import Profile
 from src.schemas.commit import CommitOut, CommitAnalyzeResult
 from src.services.ai import ai_service
+from src.services.github import GitHubService
 
 router = APIRouter(prefix="/repositories/{repo_id}/commits", tags=["commits"])
 
@@ -29,6 +33,91 @@ async def _assert_repo_owner(repo_id: uuid.UUID, user_id: str, db: AsyncSession)
     return repo
 
 
+async def _sync_commits_from_github(repo: Repository, db: AsyncSession) -> None:
+    """Best-effort backfill: without this, a commit only ever appears in our
+    DB if a push-event webhook happened to fire for it (webhook.py) — a
+    repo's existing history at connect time, or any repo whose webhook isn't
+    actively delivering, would otherwise show nothing. Pulls the latest
+    commits straight from GitHub's list-commits API (GitHubService.get_commits,
+    previously written but never actually called anywhere) and inserts
+    whichever ones aren't already stored, enriched with the same per-file
+    diff/stat data webhook.py fetches for a live push.
+    """
+    owner_result = await db.execute(select(Profile).where(Profile.id == repo.owner_id))
+    owner = owner_result.scalar_one_or_none()
+    if not owner or not owner.github_access_token:
+        return
+
+    gh = GitHubService(owner.github_access_token)
+    try:
+        try:
+            remote_commits = await gh.get_commits(repo.full_name, branch=repo.default_branch, per_page=30)
+        except Exception:
+            return  # GitHub unreachable, token revoked, branch renamed, etc. — non-fatal
+
+        shas = [rc.get("sha", "") for rc in remote_commits if rc.get("sha")]
+        if not shas:
+            return
+        existing_result = await db.execute(
+            select(Commit.sha).where(Commit.repository_id == repo.id, Commit.sha.in_(shas))
+        )
+        existing_shas = {row[0] for row in existing_result.all()}
+        new_commits = [rc for rc in remote_commits if rc.get("sha") not in existing_shas]
+        if not new_commits:
+            return
+
+        details = await asyncio.gather(
+            *(gh.get_commit_detail(repo.full_name, rc["sha"]) for rc in new_commits),
+            return_exceptions=True,
+        )
+
+        for rc, detail in zip(new_commits, details):
+            sha = rc["sha"]
+            commit_info = rc.get("commit", {})
+            author_info = commit_info.get("author", {})
+            try:
+                committed_at = datetime.fromisoformat(author_info.get("date", "").replace("Z", "+00:00"))
+            except Exception:
+                committed_at = datetime.now(timezone.utc)
+
+            additions = deletions = 0
+            files: list = []
+            if not isinstance(detail, Exception):
+                stats = detail.get("stats", {})
+                additions = stats.get("additions", 0)
+                deletions = stats.get("deletions", 0)
+                files = [
+                    {
+                        "filename": f.get("filename", ""),
+                        "status": f.get("status", ""),
+                        "additions": f.get("additions", 0),
+                        "deletions": f.get("deletions", 0),
+                        "patch": f.get("patch"),
+                    }
+                    for f in detail.get("files", [])
+                ]
+
+            db.add(Commit(
+                repository_id=repo.id,
+                sha=sha,
+                short_sha=sha[:7],
+                message=commit_info.get("message", ""),
+                author_name=author_info.get("name", ""),
+                author_email=author_info.get("email", ""),
+                author_avatar=(rc.get("author") or {}).get("avatar_url"),
+                committed_at=committed_at,
+                html_url=rc.get("html_url", ""),
+                branch=repo.default_branch,
+                changed_files=len(files),
+                additions=additions,
+                deletions=deletions,
+                files_changed=files,
+            ))
+        await db.commit()
+    finally:
+        await gh.close()
+
+
 @router.get("", response_model=List[CommitOut])
 async def list_commits(
     repo_id: uuid.UUID,
@@ -36,7 +125,8 @@ async def list_commits(
     user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
-    await _assert_repo_owner(repo_id, user_id, db)
+    repo = await _assert_repo_owner(repo_id, user_id, db)
+    await _sync_commits_from_github(repo, db)
     result = await db.execute(
         select(Commit)
         .where(Commit.repository_id == repo_id)
