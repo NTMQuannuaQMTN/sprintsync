@@ -18,6 +18,7 @@ export default function LoginPage() {
   }, [router])
 
   const handleLogin = () => {
+    console.log('Logging in with GitHub...', `${window.location.origin}/auth/callback`);
     supabase.auth.signInWithOAuth({
       provider: 'github',
       options: {
