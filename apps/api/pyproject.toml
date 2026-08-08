@@ -3,6 +3,37 @@ name = "sprintsync-api"
 version = "0.1.0"
 description = "SprintSync AI — FastAPI Backend"
 requires-python = ">=3.11"
+# Vercel's Python builder (uv) prefers pyproject.toml over requirements.txt
+# when both are present — without this list, it "succeeds" having installed
+# nothing at all (ModuleNotFoundError: No module named 'fastapi' at cold
+# start). Keep in sync with requirements.txt, which local dev / other hosts
+# (Render, Railway, etc.) still use directly.
+dependencies = [
+    "fastapi==0.115.0",
+    "uvicorn[standard]==0.30.6",
+    "sqlalchemy==2.0.35",
+    "greenlet==3.5.4",
+    "alembic==1.13.3",
+    "asyncpg==0.29.0",
+    "psycopg2-binary==2.9.9",
+    "python-dotenv==1.0.1",
+    "python-jose[cryptography]==3.3.0",
+    "httpx==0.27.2",
+    "python-multipart==0.0.12",
+    "pydantic==2.9.2",
+    "pydantic-settings==2.5.2",
+    "aiofiles==24.1.0",
+    "python-docx==1.1.2",
+    "PyPDF2==3.0.1",
+    "supabase==2.9.1",
+    "passlib[bcrypt]==1.7.4",
+    "structlog==24.4.0",
+]
+
+[tool.uv]
+# src/ isn't a distributable package layout — just resolve and install the
+# dependencies above, don't try to build/install this project itself.
+package = false
 
 [tool.ruff]
 line-length = 100
