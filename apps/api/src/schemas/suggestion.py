@@ -31,3 +31,7 @@ class SuggestionOut(BaseModel):
 
 class SuggestionReview(BaseModel):
     note: Optional[str] = None
+
+
+class BulkReviewResult(BaseModel):
+    count: int

@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { useParams } from 'next/navigation'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Sparkles, Check, X, GitCommit } from 'lucide-react'
+import { Sparkles, Check, X, GitCommit, CheckCheck, Loader2 } from 'lucide-react'
 import { reposApi, suggestionsApi } from '@/lib/api'
 import { ConfidenceBar } from '@/components/ui/ConfidenceBar'
 import { SkeletonCard } from '@/components/ui/Skeleton'
@@ -133,6 +133,7 @@ function SuggestionCard({ repoId, suggestion }: { repoId: string; suggestion: Su
 export default function RepoSuggestionsPage() {
   const { id } = useParams<{ id: string }>()
   const [tab, setTab] = useState<SuggestionStatus>('pending')
+  const queryClient = useQueryClient()
 
   const { data: repo } = useQuery({
     queryKey: ['repo', id],
@@ -146,26 +147,90 @@ export default function RepoSuggestionsPage() {
     enabled: !!id,
   })
 
+  const invalidateAfterBulk = () => {
+    queryClient.invalidateQueries({ queryKey: ['suggestions', id] })
+    queryClient.invalidateQueries({ queryKey: ['tasks', id] })
+    queryClient.invalidateQueries({ queryKey: ['repo', id] })
+  }
+
+  const approveAllMutation = useMutation({
+    mutationFn: () => suggestionsApi.approveAll(id),
+    onSuccess: invalidateAfterBulk,
+  })
+  const rejectAllMutation = useMutation({
+    mutationFn: () => suggestionsApi.rejectAll(id),
+    onSuccess: invalidateAfterBulk,
+  })
+
+  const bulkBusy = approveAllMutation.isPending || rejectAllMutation.isPending
+  const showBulkActions = tab === 'pending' && (suggestions?.length ?? 0) > 0
+
   return (
     <AppShell headerTitle="AI Suggestions" repoId={id} repoName={repo?.name}>
       <div className="p-6 max-w-3xl mx-auto fade-in">
         <div className="bg-white border border-gray-100 rounded-xl">
-          <div className="flex items-center gap-1 px-3 pt-3 border-b border-gray-50">
-            {TABS.map((t) => (
-              <button
-                key={t.id}
-                onClick={() => setTab(t.id)}
-                className={cn(
-                  'px-3 py-2 text-xs font-medium rounded-t-lg transition-colors',
-                  tab === t.id
-                    ? 'text-[#0F62FE] border-b-2 border-[#0F62FE]'
-                    : 'text-gray-500 hover:text-gray-700',
-                )}
-              >
-                {t.label}
-              </button>
-            ))}
+          <div className="flex items-center justify-between gap-2 px-3 pt-3 border-b border-gray-50">
+            <div className="flex items-center gap-1">
+              {TABS.map((t) => (
+                <button
+                  key={t.id}
+                  onClick={() => setTab(t.id)}
+                  className={cn(
+                    'px-3 py-2 text-xs font-medium rounded-t-lg transition-colors',
+                    tab === t.id
+                      ? 'text-[#0F62FE] border-b-2 border-[#0F62FE]'
+                      : 'text-gray-500 hover:text-gray-700',
+                  )}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+
+            {showBulkActions && (
+              <div className="flex items-center gap-2 pb-2">
+                <button
+                  onClick={() => {
+                    if (window.confirm(`Reject all ${suggestions?.length} pending suggestion(s)?`)) {
+                      rejectAllMutation.mutate()
+                    }
+                  }}
+                  disabled={bulkBusy}
+                  className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-50 rounded-md transition-colors disabled:opacity-50"
+                >
+                  {rejectAllMutation.isPending ? (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  ) : (
+                    <X className="w-3 h-3" />
+                  )}
+                  Reject all
+                </button>
+                <button
+                  onClick={() => {
+                    if (window.confirm(`Approve all ${suggestions?.length} pending suggestion(s)? This will update the corresponding task statuses.`)) {
+                      approveAllMutation.mutate()
+                    }
+                  }}
+                  disabled={bulkBusy}
+                  className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium bg-[#16A34A] text-white hover:bg-green-700 rounded-md transition-colors disabled:opacity-50"
+                >
+                  {approveAllMutation.isPending ? (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  ) : (
+                    <CheckCheck className="w-3 h-3" />
+                  )}
+                  Approve all
+                </button>
+              </div>
+            )}
           </div>
+
+          {(approveAllMutation.isError || rejectAllMutation.isError) && (
+            <p className="px-5 pt-3 text-xs text-rose-600">
+              {((approveAllMutation.error || rejectAllMutation.error) as Error).message ||
+                'Bulk action failed'}
+            </p>
+          )}
 
           {isLoading ? (
             <div className="p-4 space-y-2">{[0, 1].map((i) => <SkeletonCard key={i} />)}</div>

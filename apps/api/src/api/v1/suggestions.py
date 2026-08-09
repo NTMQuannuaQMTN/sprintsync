@@ -14,7 +14,7 @@ from src.models.suggestion import Suggestion, SuggestionStatus
 from src.models.task import Task
 from src.models.commit import Commit
 from src.models.activity_log import ActivityLog, ActivityType
-from src.schemas.suggestion import SuggestionOut, SuggestionReview
+from src.schemas.suggestion import SuggestionOut, SuggestionReview, BulkReviewResult
 
 router = APIRouter(prefix="/repositories/{repo_id}/suggestions", tags=["suggestions"])
 
@@ -65,6 +65,88 @@ async def list_suggestions(
     result = await db.execute(q)
     suggestions = result.scalars().all()
     return [await _enrich(s, db) for s in suggestions]
+
+
+@router.post("/approve-all", response_model=BulkReviewResult)
+async def approve_all_suggestions(
+    repo_id: uuid.UUID,
+    body: SuggestionReview = SuggestionReview(),
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Approve every currently pending suggestion for this repo — same
+    per-suggestion effect as POST /{suggestion_id}/approve (applies the
+    proposed task status change), just batched with one activity log entry
+    instead of one per suggestion."""
+    await _assert_repo_owner(repo_id, user_id, db)
+    result = await db.execute(
+        select(Suggestion).where(
+            Suggestion.repository_id == repo_id, Suggestion.status == SuggestionStatus.PENDING
+        )
+    )
+    pending = result.scalars().all()
+    if not pending:
+        return BulkReviewResult(count=0)
+
+    now = datetime.now(timezone.utc)
+    for suggestion in pending:
+        suggestion.status = SuggestionStatus.APPROVED
+        suggestion.reviewed_at = now
+        suggestion.reviewed_by = user_id
+        suggestion.reviewer_note = body.note
+        if suggestion.task_id and suggestion.proposed_status:
+            tr = await db.execute(select(Task).where(Task.id == suggestion.task_id))
+            task = tr.scalar_one_or_none()
+            if task:
+                task.status = suggestion.proposed_status  # type: ignore
+
+    db.add(ActivityLog(
+        user_id=user_id,
+        repository_id=repo_id,
+        event_type=ActivityType.SUGGESTION_APPROVED,
+        title=f"{len(pending)} suggestion(s) approved in bulk",
+    ))
+
+    await db.commit()
+    return BulkReviewResult(count=len(pending))
+
+
+@router.post("/reject-all", response_model=BulkReviewResult)
+async def reject_all_suggestions(
+    repo_id: uuid.UUID,
+    body: SuggestionReview = SuggestionReview(),
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Reject every currently pending suggestion for this repo. Never
+    touches any task — same as the single-suggestion reject endpoint."""
+    await _assert_repo_owner(repo_id, user_id, db)
+    result = await db.execute(
+        select(Suggestion).where(
+            Suggestion.repository_id == repo_id, Suggestion.status == SuggestionStatus.PENDING
+        )
+    )
+    pending = result.scalars().all()
+    if not pending:
+        return BulkReviewResult(count=0)
+
+    now = datetime.now(timezone.utc)
+    for suggestion in pending:
+        suggestion.status = SuggestionStatus.REJECTED
+        suggestion.reviewed_at = now
+        suggestion.reviewed_by = user_id
+        suggestion.reviewer_note = body.note
+
+    db.add(ActivityLog(
+        user_id=user_id,
+        repository_id=repo_id,
+        event_type=ActivityType.SUGGESTION_REJECTED,
+        title=f"{len(pending)} suggestion(s) rejected in bulk",
+        description=body.note,
+    ))
+
+    await db.commit()
+    return BulkReviewResult(count=len(pending))
 
 
 @router.get("/{suggestion_id}", response_model=SuggestionOut)

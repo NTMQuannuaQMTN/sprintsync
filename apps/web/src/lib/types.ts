@@ -120,6 +120,10 @@ export interface Suggestion {
   commit_message: string | null
 }
 
+export interface BulkReviewResult {
+  count: number
+}
+
 // Matches the backend's CommitSummary — the trimmed shape embedded in
 // DashboardData.recent_commits.
 export interface Commit {

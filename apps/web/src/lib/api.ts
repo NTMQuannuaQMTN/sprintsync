@@ -19,6 +19,7 @@ import type {
   ActivityItem,
   CommitDetail,
   CommitAnalyzeResult,
+  BulkReviewResult,
 } from './types'
 
 const BASE = '/api/v1'
@@ -163,6 +164,16 @@ export const suggestionsApi = {
     request<Suggestion>(`/repositories/${repoId}/suggestions/${id}/reject`, {
       method: 'POST',
       body: JSON.stringify({ note }),
+    }),
+  approveAll: (repoId: string) =>
+    request<BulkReviewResult>(`/repositories/${repoId}/suggestions/approve-all`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }),
+  rejectAll: (repoId: string) =>
+    request<BulkReviewResult>(`/repositories/${repoId}/suggestions/reject-all`, {
+      method: 'POST',
+      body: JSON.stringify({}),
     }),
 }
 
