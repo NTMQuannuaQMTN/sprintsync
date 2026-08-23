@@ -22,6 +22,13 @@ from src.services.github import GitHubService
 
 router = APIRouter(prefix="/repositories/{repo_id}/commits", tags=["commits"])
 
+# How long _sync_commits_from_github lets a repo go between real GitHub
+# round-trips. Without this, every single page load of the Commits page
+# paid for a live GitHub API call (list-commits, plus a per-new-commit
+# detail fetch) even when nothing had changed — ~1s+ per visit measured
+# locally, worse with a backlog of unsynced commits.
+COMMIT_SYNC_COOLDOWN_SECONDS = 60
+
 
 async def _assert_repo_owner(repo_id: uuid.UUID, user_id: str, db: AsyncSession) -> Repository:
     result = await db.execute(
@@ -43,6 +50,12 @@ async def _sync_commits_from_github(repo: Repository, db: AsyncSession) -> None:
     whichever ones aren't already stored, enriched with the same per-file
     diff/stat data webhook.py fetches for a live push.
     """
+    now = datetime.now(timezone.utc)
+    if repo.last_commit_sync_at is not None:
+        elapsed = (now - repo.last_commit_sync_at).total_seconds()
+        if elapsed < COMMIT_SYNC_COOLDOWN_SECONDS:
+            return  # synced recently enough — skip the GitHub round-trip entirely
+
     owner_result = await db.execute(select(Profile).where(Profile.id == repo.owner_id))
     owner = owner_result.scalar_one_or_none()
     if not owner or not owner.github_access_token:
@@ -54,6 +67,12 @@ async def _sync_commits_from_github(repo: Repository, db: AsyncSession) -> None:
             remote_commits = await gh.get_commits(repo.full_name, branch=repo.default_branch, per_page=30)
         except Exception:
             return  # GitHub unreachable, token revoked, branch renamed, etc. — non-fatal
+        finally:
+            # Set regardless of outcome (including the except above) so a
+            # broken/rate-limited call also gets a cooldown instead of
+            # retrying on every single request.
+            repo.last_commit_sync_at = now
+            await db.commit()
 
         shas = [rc.get("sha", "") for rc in remote_commits if rc.get("sha")]
         if not shas:

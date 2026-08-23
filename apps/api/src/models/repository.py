@@ -1,8 +1,9 @@
 """Repository model — connected GitHub repositories."""
 import uuid
+from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import String, Text, Boolean, Integer, Index
+from sqlalchemy import String, Text, Boolean, Integer, DateTime, Index
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -38,6 +39,12 @@ class Repository(UUIDMixin, TimestampMixin, Base):
 
     # Computed health score (0-100, cached)
     health_score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    # Last time _sync_commits_from_github (commits.py) actually hit the
+    # GitHub API for this repo — lets that sync skip the round-trip (and
+    # the per-new-commit detail fetches) on every single page load, instead
+    # of only on a cooldown. See COMMIT_SYNC_COOLDOWN_SECONDS in commits.py.
+    last_commit_sync_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Relationships
     project_specs: Mapped[list["ProjectSpecification"]] = relationship(  # noqa: F821

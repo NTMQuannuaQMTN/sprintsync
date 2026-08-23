@@ -22,7 +22,7 @@ export default function LoginPage() {
     supabase.auth.signInWithOAuth({
       provider: 'github',
       options: {
-        scopes: 'read:user user:email repo',
+        scopes: 'read:user user:email repo read:org',
         redirectTo: `${window.location.origin}/auth/callback`,
       },
     })
