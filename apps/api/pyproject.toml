@@ -6,8 +6,11 @@ requires-python = ">=3.11"
 # Vercel's Python builder (uv) prefers pyproject.toml over requirements.txt
 # when both are present — without this list, it "succeeds" having installed
 # nothing at all (ModuleNotFoundError: No module named 'fastapi' at cold
-# start). Keep in sync with requirements.txt, which local dev / other hosts
-# (Render, Railway, etc.) still use directly.
+# start). Keep the runtime deps below in sync with requirements.txt, which
+# local dev / other hosts (Render, Railway, etc.) still use directly.
+# Deliberately NOT included here: pytest/pytest-asyncio/ruff/mypy — those
+# are dev/test-only (see requirements.txt) and would only bloat the actual
+# Vercel deployment.
 dependencies = [
     "fastapi==0.115.0",
     "uvicorn[standard]==0.30.6",

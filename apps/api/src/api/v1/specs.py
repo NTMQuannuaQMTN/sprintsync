@@ -3,6 +3,7 @@ import uuid
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -14,7 +15,7 @@ from src.models.task import Task
 from src.models.activity_log import ActivityLog, ActivityType
 from src.schemas.project_spec import SpecOut
 from src.schemas.task import TaskOut
-from src.services.document_parser import extract_text
+from src.services.document_parser import extract_text, extract_google_doc_text
 from src.services.ai import ai_service
 from src.api.v1.tasks import _to_task_out
 
@@ -28,6 +29,10 @@ ALLOWED_MIME_TYPES = {
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
 
 
+class SpecFromLinkRequest(BaseModel):
+    url: str
+
+
 async def _assert_repo_owner(repo_id: uuid.UUID, user_id: str, db: AsyncSession) -> Repository:
     result = await db.execute(
         select(Repository).where(Repository.id == repo_id, Repository.owner_id == user_id)
@@ -36,6 +41,45 @@ async def _assert_repo_owner(repo_id: uuid.UUID, user_id: str, db: AsyncSession)
     if not repo:
         raise HTTPException(status_code=404, detail="Repository not found")
     return repo
+
+
+async def _finalize_spec(
+    spec: ProjectSpecification,
+    repo: Repository,
+    extracted_text: str,
+    user_id: str,
+    db: AsyncSession,
+) -> SpecOut:
+    """Shared tail end of both intake paths (file upload, Google Doc link):
+    run AI draft-task extraction over already-extracted text, log activity,
+    and return the spec with draft_tasks populated. Nothing is written to
+    the tasks table here — same review-before-save contract as the file
+    upload path (see POST /repositories/{repo_id}/tasks/bulk)."""
+    spec.extracted_text = extracted_text
+
+    draft_tasks = await ai_service.extract_tasks_from_text(extracted_text, repo.name)
+
+    spec.status = SpecStatus.DONE
+    spec.task_count = 0
+    spec.ai_summary = (
+        f"AI extracted {len(draft_tasks)} draft task(s) from {spec.filename}. "
+        f"Review and save the ones you want to keep."
+    )
+
+    db.add(ActivityLog(
+        user_id=user_id,
+        repository_id=repo.id,
+        event_type=ActivityType.SPEC_UPLOADED,
+        title=f"Uploaded specification: {spec.filename}",
+        description=f"AI drafted {len(draft_tasks)} tasks pending review",
+    ))
+
+    await db.commit()
+    await db.refresh(spec)
+
+    out = SpecOut.model_validate(spec)
+    out.draft_tasks = draft_tasks
+    return out
 
 
 @router.get("", response_model=List[SpecOut])
@@ -112,37 +156,38 @@ async def upload_spec(
         await db.commit()
         return SpecOut.model_validate(spec)
 
-    spec.extracted_text = extracted_text
+    return await _finalize_spec(spec, repo, extracted_text, user_id, db)
 
-    # AI task extraction — these are DRAFTS ONLY. Nothing is written to the
-    # tasks table here; the human must review and confirm via
-    # POST /repositories/{repo_id}/tasks/bulk (with spec_id set) before any
-    # Task row is created. task_count stays 0 until that confirmation happens.
-    draft_tasks = await ai_service.extract_tasks_from_text(extracted_text, repo.name)
 
-    spec.status = SpecStatus.DONE
-    spec.task_count = 0
-    spec.ai_summary = (
-        f"AI extracted {len(draft_tasks)} draft task(s) from {file.filename}. "
-        f"Review and save the ones you want to keep."
-    )
+@router.post("/from-link", response_model=SpecOut, status_code=status.HTTP_201_CREATED)
+async def upload_spec_from_link(
+    repo_id: uuid.UUID,
+    body: SpecFromLinkRequest,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Upload a project specification from a Google Docs link, as an
+    alternative to uploading a file. The doc must be shared as "Anyone with
+    the link" (Viewer) — see extract_google_doc_text for why."""
+    repo = await _assert_repo_owner(repo_id, user_id, db)
 
-    # Activity log
-    log = ActivityLog(
-        user_id=user_id,
+    extracted_text, error = await extract_google_doc_text(body.url)
+    if error:
+        raise HTTPException(status_code=400, detail=error)
+
+    spec = ProjectSpecification(
         repository_id=repo_id,
-        event_type=ActivityType.SPEC_UPLOADED,
-        title=f"Uploaded specification: {file.filename}",
-        description=f"AI drafted {len(draft_tasks)} tasks pending review",
+        filename="Google Doc",
+        mime_type="text/plain",
+        storage_path=f"{repo_id}/google-doc/{uuid.uuid4()}",
+        storage_url=body.url,
+        status=SpecStatus.PROCESSING,
     )
-    db.add(log)
-
+    db.add(spec)
     await db.commit()
     await db.refresh(spec)
 
-    out = SpecOut.model_validate(spec)
-    out.draft_tasks = draft_tasks
-    return out
+    return await _finalize_spec(spec, repo, extracted_text, user_id, db)
 
 
 @router.get("/{spec_id}/tasks", response_model=List[TaskOut])

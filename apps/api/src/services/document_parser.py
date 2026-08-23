@@ -1,6 +1,48 @@
 """Document parser — extract text from PDF and DOCX files."""
 import io
+import re
 from typing import List, Tuple
+
+import httpx
+
+_GOOGLE_DOC_ID_RE = re.compile(r"/document/d/([a-zA-Z0-9_-]+)")
+
+
+async def extract_google_doc_text(url: str) -> Tuple[str, str]:
+    """Fetch a Google Doc's plain-text export by URL.
+
+    No OAuth/service-account flow — this only works for docs shared as
+    "Anyone with the link" (Viewer). A restricted doc's export redirects to
+    a Google sign-in page instead of the document; that's detected via the
+    response content-type (an HTML login page, not text/plain) and reported
+    as a clear error rather than silently ingesting the login page as if it
+    were the spec's content.
+    """
+    match = _GOOGLE_DOC_ID_RE.search(url)
+    if not match:
+        return "", "That doesn't look like a Google Docs link (expected a docs.google.com/document/d/... URL)."
+
+    doc_id = match.group(1)
+    export_url = f"https://docs.google.com/document/d/{doc_id}/export?format=txt"
+
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=15.0) as client:
+            resp = await client.get(export_url)
+    except Exception as e:
+        return "", f"Could not reach Google Docs: {e}"
+
+    content_type = resp.headers.get("content-type", "")
+    if resp.status_code != 200 or "text/plain" not in content_type:
+        return (
+            "",
+            "Could not access this Google Doc. Make sure it's shared as "
+            '"Anyone with the link" (Viewer) — restricted documents can\'t be read.',
+        )
+
+    text = resp.content.decode("utf-8", errors="replace")
+    if not text.strip():
+        return "", "The Google Doc appears to be empty."
+    return text, ""
 
 
 async def extract_text(file_bytes: bytes, mime_type: str, filename: str) -> Tuple[str, str]:

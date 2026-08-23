@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { useQuery, useMutation } from '@tanstack/react-query'
-import { Upload, FileText, Loader2, CheckSquare, Square, ArrowRight } from 'lucide-react'
+import { Upload, FileText, Loader2, CheckSquare, Square, ArrowRight, Link as LinkIcon } from 'lucide-react'
 import { reposApi, specsApi, tasksApi } from '@/lib/api'
 import { PriorityBadge } from '@/components/ui/StatusBadge'
 import AppShell from '@/components/layout/AppShell'
@@ -19,6 +19,7 @@ export default function UploadSpecPage() {
   const { id } = useParams<{ id: string }>()
   const router = useRouter()
   const [file, setFile] = useState<File | null>(null)
+  const [docLink, setDocLink] = useState('')
   const [spec, setSpec] = useState<ProjectSpec | null>(null)
   const [items, setItems] = useState<ReviewItem[]>([])
 
@@ -28,13 +29,22 @@ export default function UploadSpecPage() {
     enabled: !!id,
   })
 
+  const onSpecReady = (result: ProjectSpec) => {
+    setSpec(result)
+    setItems(result.draft_tasks.map((t) => ({ ...t, selected: true })))
+  }
+
   const uploadMutation = useMutation({
     mutationFn: (f: File) => specsApi.upload(id, f),
-    onSuccess: (result) => {
-      setSpec(result)
-      setItems(result.draft_tasks.map((t) => ({ ...t, selected: true })))
-    },
+    onSuccess: onSpecReady,
   })
+
+  const linkMutation = useMutation({
+    mutationFn: () => specsApi.uploadFromLink(id, docLink),
+    onSuccess: onSpecReady,
+  })
+
+  const intakeBusy = uploadMutation.isPending || linkMutation.isPending
 
   const saveMutation = useMutation({
     mutationFn: () => {
@@ -64,52 +74,96 @@ export default function UploadSpecPage() {
     <AppShell headerTitle="Upload Specification" repoId={id} repoName={repo?.name}>
       <div className="p-6 max-w-3xl mx-auto fade-in space-y-6">
         {!spec ? (
-          <div className="bg-white border border-gray-100 rounded-xl p-8">
-            <div className="w-12 h-12 bg-blue-50 rounded-2xl flex items-center justify-center mb-4">
-              <Upload className="w-6 h-6 text-blue-700" />
-            </div>
-            <h2 className="text-base font-semibold text-gray-900 mb-1">Upload a project specification</h2>
-            <p className="text-sm text-gray-500 mb-5">
-              PDF or DOCX, up to 10MB. AI will extract a draft implementation checklist — nothing is
-              saved until you review and confirm it below.
-            </p>
-
-            <label className="flex items-center justify-between gap-3 border border-dashed border-gray-300 rounded-lg px-4 py-3 cursor-pointer hover:border-gray-400 transition-colors">
-              <div className="flex items-center gap-2 min-w-0">
-                <FileText className="w-4 h-4 text-gray-400 flex-shrink-0" />
-                <span className="text-sm text-gray-600 truncate">
-                  {file ? file.name : 'Choose a PDF or DOCX file…'}
-                </span>
+          <>
+            <div className="bg-white border border-gray-100 rounded-xl p-8">
+              <div className="w-12 h-12 bg-blue-50 rounded-2xl flex items-center justify-center mb-4">
+                <Upload className="w-6 h-6 text-blue-700" />
               </div>
-              {file && <span className="text-xs text-gray-400 flex-shrink-0">{formatBytes(file.size)}</span>}
-              <input
-                type="file"
-                accept=".pdf,.docx,.doc,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                className="hidden"
-                onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-              />
-            </label>
-
-            {uploadMutation.isError && (
-              <p className="text-xs text-rose-600 mt-3">
-                {(uploadMutation.error as Error).message || 'Upload failed'}
+              <h2 className="text-base font-semibold text-gray-900 mb-1">Upload a project specification</h2>
+              <p className="text-sm text-gray-500 mb-5">
+                PDF or DOCX, up to 10MB. AI will extract a draft implementation checklist — nothing is
+                saved until you review and confirm it below.
               </p>
-            )}
 
-            <button
-              onClick={() => file && uploadMutation.mutate(file)}
-              disabled={!file || uploadMutation.isPending}
-              className="mt-5 flex items-center gap-2 px-4 py-2 bg-[#0F62FE] text-white text-sm rounded-lg hover:bg-blue-700 transition-colors font-medium disabled:opacity-50"
-            >
-              {uploadMutation.isPending ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" /> Analyzing…
-                </>
-              ) : (
-                'Upload & Analyze'
+              <label className="flex items-center justify-between gap-3 border border-dashed border-gray-300 rounded-lg px-4 py-3 cursor-pointer hover:border-gray-400 transition-colors">
+                <div className="flex items-center gap-2 min-w-0">
+                  <FileText className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                  <span className="text-sm text-gray-600 truncate">
+                    {file ? file.name : 'Choose a PDF or DOCX file…'}
+                  </span>
+                </div>
+                {file && <span className="text-xs text-gray-400 flex-shrink-0">{formatBytes(file.size)}</span>}
+                <input
+                  type="file"
+                  accept=".pdf,.docx,.doc,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                  className="hidden"
+                  onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                />
+              </label>
+
+              {uploadMutation.isError && (
+                <p className="text-xs text-rose-600 mt-3">
+                  {(uploadMutation.error as Error).message || 'Upload failed'}
+                </p>
               )}
-            </button>
-          </div>
+
+              <button
+                onClick={() => file && uploadMutation.mutate(file)}
+                disabled={!file || intakeBusy}
+                className="mt-5 flex items-center gap-2 px-4 py-2 bg-[#0F62FE] text-white text-sm rounded-lg hover:bg-blue-700 transition-colors font-medium disabled:opacity-50"
+              >
+                {uploadMutation.isPending ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" /> Analyzing…
+                  </>
+                ) : (
+                  'Upload & Analyze'
+                )}
+              </button>
+            </div>
+
+            <div className="bg-white border border-gray-100 rounded-xl p-8">
+              <div className="w-12 h-12 bg-blue-50 rounded-2xl flex items-center justify-center mb-4">
+                <LinkIcon className="w-6 h-6 text-blue-700" />
+              </div>
+              <h2 className="text-base font-semibold text-gray-900 mb-1">Or paste a Google Docs link</h2>
+              <p className="text-sm text-gray-500 mb-5">
+                The doc must be shared as "Anyone with the link" (Viewer) — this app can't read
+                restricted documents.
+              </p>
+
+              <div className="flex items-center gap-3 border border-dashed border-gray-300 rounded-lg px-4 py-3 focus-within:border-gray-400 transition-colors">
+                <LinkIcon className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                <input
+                  type="url"
+                  value={docLink}
+                  onChange={(e) => setDocLink(e.target.value)}
+                  placeholder="https://docs.google.com/document/d/…"
+                  className="flex-1 text-sm text-gray-700 bg-transparent focus:outline-none min-w-0"
+                />
+              </div>
+
+              {linkMutation.isError && (
+                <p className="text-xs text-rose-600 mt-3">
+                  {(linkMutation.error as Error).message || 'Could not process this Google Doc'}
+                </p>
+              )}
+
+              <button
+                onClick={() => docLink.trim() && linkMutation.mutate()}
+                disabled={!docLink.trim() || intakeBusy}
+                className="mt-5 flex items-center gap-2 px-4 py-2 bg-[#0F62FE] text-white text-sm rounded-lg hover:bg-blue-700 transition-colors font-medium disabled:opacity-50"
+              >
+                {linkMutation.isPending ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" /> Analyzing…
+                  </>
+                ) : (
+                  'Analyze'
+                )}
+              </button>
+            </div>
+          </>
         ) : (
           <>
             <div className="bg-white border border-gray-100 rounded-xl p-5">

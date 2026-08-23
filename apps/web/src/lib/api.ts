@@ -144,6 +144,11 @@ export const specsApi = {
     }
     return res.json()
   },
+  uploadFromLink: (repoId: string, url: string) =>
+    request<ProjectSpec>(`/repositories/${repoId}/specs/from-link`, {
+      method: 'POST',
+      body: JSON.stringify({ url }),
+    }),
   getTasks: (repoId: string, specId: string) =>
     request<Task[]>(`/repositories/${repoId}/specs/${specId}/tasks`),
 }
