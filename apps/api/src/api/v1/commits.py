@@ -17,7 +17,10 @@ from src.models.suggestion import Suggestion, SuggestionAction
 from src.models.activity_log import ActivityLog, ActivityType
 from src.models.profile import Profile
 from src.schemas.commit import CommitOut, CommitAnalyzeResult
+from src.schemas.pull_request import SummaryOut
 from src.services.ai_reasoning.reasoning import analyze_activity
+from src.services.ai_reasoning.prompt import build_diff_excerpt
+from src.services.ai_reasoning.summarization import summarize_commit
 from src.services.github import GitHubService
 
 router = APIRouter(prefix="/repositories/{repo_id}/commits", tags=["commits"])
@@ -252,3 +255,26 @@ async def get_commit(
     if not commit:
         raise HTTPException(status_code=404, detail="Commit not found")
     return CommitOut.model_validate(commit)
+
+
+@router.get("/{commit_id}/summary", response_model=SummaryOut)
+async def get_commit_summary(
+    repo_id: uuid.UUID,
+    commit_id: uuid.UUID,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """AI (or heuristic-fallback) summary of what this commit does —
+    computed on demand, same pattern as the PR summary endpoint."""
+    await _assert_repo_owner(repo_id, user_id, db)
+    result = await db.execute(
+        select(Commit).where(Commit.id == commit_id, Commit.repository_id == repo_id)
+    )
+    commit = result.scalar_one_or_none()
+    if not commit:
+        raise HTTPException(status_code=404, detail="Commit not found")
+    diff_excerpt = build_diff_excerpt(commit.files_changed or [])
+    summary_result = await summarize_commit(
+        message=commit.message, files_changed=commit.files_changed or [], diff_excerpt=diff_excerpt
+    )
+    return SummaryOut(**summary_result)
