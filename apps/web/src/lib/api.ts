@@ -20,6 +20,10 @@ import type {
   CommitDetail,
   CommitAnalyzeResult,
   BulkReviewResult,
+  Integration,
+  PullRequest,
+  SummaryResult,
+  ProjectIntelligence,
 } from './types'
 
 const BASE = '/api/v1'
@@ -97,6 +101,10 @@ export const reposApi = {
   connect: (githubRepoId: number) =>
     request<Repository>(`/repositories?github_repo_id=${githubRepoId}`, { method: 'POST' }),
   disconnect: (id: string) => request<void>(`/repositories/${id}`, { method: 'DELETE' }),
+  reinstallWebhook: (id: string) => request<Repository>(`/repositories/${id}/webhook/reinstall`, { method: 'POST' }),
+  generateActionToken: (id: string) =>
+    request<{ action_token: string }>(`/repositories/${id}/action-token`, { method: 'POST' }),
+  revokeActionToken: (id: string) => request<void>(`/repositories/${id}/action-token`, { method: 'DELETE' }),
 }
 
 // ─── Tasks ────────────────────────────────────────────────────────────────────
@@ -198,4 +206,48 @@ export const commitsApi = {
     request<CommitDetail>(`/repositories/${repoId}/commits/${commitId}`),
   analyze: (repoId: string) =>
     request<CommitAnalyzeResult>(`/repositories/${repoId}/commits/analyze`, { method: 'POST' }),
+  summary: (repoId: string, commitId: string) =>
+    request<SummaryResult>(`/repositories/${repoId}/commits/${commitId}/summary`),
+}
+
+// ─── Pull Requests ────────────────────────────────────────────────────────────
+
+export const pullRequestsApi = {
+  list: (repoId: string, limit = 30) =>
+    request<PullRequest[]>(`/repositories/${repoId}/pull_requests?limit=${limit}`),
+  get: (repoId: string, prId: string) =>
+    request<PullRequest>(`/repositories/${repoId}/pull_requests/${prId}`),
+  summary: (repoId: string, prId: string) =>
+    request<SummaryResult>(`/repositories/${repoId}/pull_requests/${prId}/summary`),
+}
+
+// ─── Repository Digest (daily/weekly summary) ────────────────────────────────
+
+export const summaryApi = {
+  get: (repoId: string, period: 'day' | 'week' = 'day') =>
+    request<SummaryResult>(`/repositories/${repoId}/summary?period=${period}`),
+}
+
+// ─── Project Intelligence ─────────────────────────────────────────────────────
+
+export const intelligenceApi = {
+  get: (repoId: string) => request<ProjectIntelligence>(`/repositories/${repoId}/intelligence`),
+}
+
+// ─── Integrations ─────────────────────────────────────────────────────────────
+
+export const integrationsApi = {
+  list: () => request<Integration[]>('/integrations'),
+  connectNotion: (data: {
+    access_token: string
+    database_id: string
+    title_property?: string
+    status_property?: string
+    workspace_name?: string
+  }) =>
+    request<Integration>('/integrations/notion/connect', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  disconnectNotion: () => request<void>('/integrations/notion', { method: 'DELETE' }),
 }

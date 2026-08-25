@@ -24,6 +24,7 @@ export interface Repository {
   private: boolean
   html_url: string
   webhook_active: boolean
+  has_action_token: boolean
   health_score: number | null
   task_count: number | null
   done_count: number | null
@@ -213,4 +214,71 @@ export const PRIORITY_LABELS: Record<TaskPriority, string> = {
   medium: 'Medium',
   high: 'High',
   critical: 'Critical',
+}
+
+// ─── V2: Integrations, Pull Requests, Summaries, Project Intelligence ─────────
+
+export interface Integration {
+  id: string
+  integration_type: 'github' | 'notion' | 'jira' | 'linear' | 'clickup' | 'confluence' | 'gitlab'
+  workspace_name: string | null
+  active: boolean
+  created_at: string
+}
+
+export interface PullRequest {
+  id: string
+  repository_id: string
+  number: number
+  title: string
+  body: string | null
+  author: string
+  html_url: string
+  branch: string
+  base_branch: string
+  state: 'open' | 'merged' | 'closed'
+  merged: boolean
+  additions: number
+  deletions: number
+  changed_files: number
+  opened_at: string
+  updated_at_github: string | null
+  closed_at: string | null
+  analyzed: boolean
+}
+
+export interface SummaryResult {
+  summary: string
+  source: 'llm' | 'heuristic'
+}
+
+export interface StaleTask {
+  task_id: string
+  title: string
+  status: string
+  last_updated_at: string
+  days_since_update: number
+}
+
+export interface UnmatchedActivity {
+  kind: 'commit' | 'pull_request'
+  id: string
+  identifier: string
+  summary: string
+  occurred_at: string
+}
+
+export interface LargeChange {
+  kind: 'commit' | 'pull_request'
+  id: string
+  identifier: string
+  summary: string
+  lines_changed: number
+  occurred_at: string
+}
+
+export interface ProjectIntelligence {
+  stale_tasks: StaleTask[]
+  unmatched_activity: UnmatchedActivity[]
+  unusually_large_changes: LargeChange[]
 }

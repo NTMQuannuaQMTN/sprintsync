@@ -1,10 +1,11 @@
 'use client'
 
 import { useParams } from 'next/navigation'
-import { useQuery } from '@tanstack/react-query'
+import { useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   GitBranch, Star, ExternalLink, CheckSquare, Sparkles,
-  GitCommit, Upload, ArrowRight, Lock
+  GitCommit, Upload, ArrowRight, Lock, RefreshCw, KeyRound, Copy, Check, Loader2
 } from 'lucide-react'
 import Link from 'next/link'
 import { reposApi, tasksApi, suggestionsApi, specsApi, commitsApi } from '@/lib/api'
@@ -12,7 +13,126 @@ import { SkeletonCard } from '@/components/ui/Skeleton'
 import { StatusBadge } from '@/components/ui/StatusBadge'
 import { ConfidenceBadge } from '@/components/ui/ConfidenceBar'
 import AppShell from '@/components/layout/AppShell'
-import type { Task } from '@/lib/types'
+import type { Repository, Task } from '@/lib/types'
+
+function ConnectionsCard({ repo, repoId }: { repo: Repository; repoId: string }) {
+  const queryClient = useQueryClient()
+  const [newToken, setNewToken] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
+
+  const reinstallMutation = useMutation({
+    mutationFn: () => reposApi.reinstallWebhook(repoId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['repo', repoId] }),
+  })
+  const generateTokenMutation = useMutation({
+    mutationFn: () => reposApi.generateActionToken(repoId),
+    onSuccess: (data) => {
+      setNewToken(data.action_token)
+      queryClient.invalidateQueries({ queryKey: ['repo', repoId] })
+    },
+  })
+  const revokeTokenMutation = useMutation({
+    mutationFn: () => reposApi.revokeActionToken(repoId),
+    onSuccess: () => {
+      setNewToken(null)
+      queryClient.invalidateQueries({ queryKey: ['repo', repoId] })
+    },
+  })
+
+  const copyToken = () => {
+    if (!newToken) return
+    navigator.clipboard.writeText(newToken)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1500)
+  }
+
+  return (
+    <div className="bg-white border border-gray-100 rounded-xl">
+      <div className="px-4 py-3 border-b border-gray-50">
+        <span className="text-sm font-semibold text-gray-900">Connections</span>
+      </div>
+      <div className="p-4 space-y-4">
+        {/* GitHub webhook */}
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-xs font-semibold text-gray-700">GitHub webhook</p>
+            <p className="text-[11px] text-gray-500 mt-0.5">
+              {repo.webhook_active ? 'Active — pushes/PRs sync automatically' : 'Not active on GitHub'}
+            </p>
+          </div>
+          {!repo.webhook_active && (
+            <button
+              onClick={() => reinstallMutation.mutate()}
+              disabled={reinstallMutation.isPending}
+              className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium text-[#0F62FE] hover:bg-blue-50 rounded-md disabled:opacity-50"
+            >
+              {reinstallMutation.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+              Install
+            </button>
+          )}
+        </div>
+        {reinstallMutation.isError && (
+          <p className="text-[11px] text-rose-600">{(reinstallMutation.error as Error).message}</p>
+        )}
+
+        <div className="border-t border-gray-50 pt-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-xs font-semibold text-gray-700">GitHub Action (no admin required)</p>
+              <p className="text-[11px] text-gray-500 mt-0.5">
+                {repo.has_action_token
+                  ? 'A token exists — rotating issues a new one and invalidates the old.'
+                  : 'Generate a token to use SprintSync from your own workflow instead of a webhook.'}
+              </p>
+            </div>
+            <button
+              onClick={() => generateTokenMutation.mutate()}
+              disabled={generateTokenMutation.isPending}
+              className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium text-[#0F62FE] hover:bg-blue-50 rounded-md disabled:opacity-50 flex-shrink-0"
+            >
+              {generateTokenMutation.isPending ? (
+                <Loader2 className="w-3 h-3 animate-spin" />
+              ) : (
+                <KeyRound className="w-3 h-3" />
+              )}
+              {repo.has_action_token ? 'Rotate' : 'Generate'}
+            </button>
+          </div>
+
+          {newToken && (
+            <div className="mt-3 p-2.5 bg-amber-50 border border-amber-100 rounded-lg">
+              <p className="text-[10px] text-amber-700 mb-1.5">
+                Shown once — store it as your repo&apos;s <code>SPRINTSYNC_TOKEN</code> Actions secret now.
+              </p>
+              <div className="flex items-center gap-1.5">
+                <code className="flex-1 text-[11px] font-mono bg-white border border-amber-200 rounded px-2 py-1 truncate">
+                  {newToken}
+                </code>
+                <button onClick={copyToken} className="p-1.5 hover:bg-amber-100 rounded">
+                  {copied ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5 text-amber-700" />}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {repo.has_action_token && (
+            <button
+              onClick={() => revokeTokenMutation.mutate()}
+              disabled={revokeTokenMutation.isPending}
+              className="mt-2 text-[11px] text-red-500 hover:text-red-700 font-medium disabled:opacity-50"
+            >
+              Revoke token
+            </button>
+          )}
+
+          <p className="text-[10px] text-gray-400 mt-2">
+            See docs/GITHUB_ACTION.md and docs/examples/sprintsync-sync.yml for the workflow setup.
+          </p>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 function ProgressRing({ pct }: { pct: number }) {
   const r = 20
@@ -243,6 +363,8 @@ export default function RepositoryDetailPage() {
                     </div>
                   )}
                 </div>
+
+                <ConnectionsCard repo={repo} repoId={id} />
               </div>
             </div>
           </>
