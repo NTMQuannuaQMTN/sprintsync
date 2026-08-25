@@ -79,4 +79,23 @@ and (for the GitHub Action) a real manual end-to-end run — not just
 "the checklist says done." The one new mypy error this pass introduced
 was caught and fixed before moving on, not left for later.
 
+## 2026-08-25 — Phase 7 completion (Notion connect flow + approval mirror)
+
+| Check | Command | Result |
+|---|---|---|
+| Full backend lint | `.venv/bin/ruff check src/ tests/` | All checks passed |
+| Full backend tests | `.venv/bin/pytest -q` | 106 passed (+8: `test_integrations.py` ×5, `test_suggestion_notion_mirror.py` ×3) |
+| Backend types | `.venv/bin/mypy src` | 27 errors, all pre-existing, none newly introduced |
+
+Notion's live-verification call (`NotionBoardProvider.verify_connection`)
+and `find_task`/`update_status` were mocked at the class level for these
+tests (no real `NOTION_TOKEN` in this environment — same blocker as
+before); the request-shape itself remains covered separately by
+`test_taskboard.py`'s `httpx.MockTransport` tests. Explicitly verified:
+approving a suggestion with no Notion connected is unchanged (existing
+behavior, no regression); approving with Notion connected calls
+`find_task`/`update_status` with the expected task title/proposed status;
+a Notion API failure during the mirror does not revert or block the
+already-committed internal Task status change.
+
 (Entries below are appended in order as V2 work proceeds.)

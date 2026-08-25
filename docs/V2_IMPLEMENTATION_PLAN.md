@@ -215,10 +215,14 @@ full live verification (real network call to a 3rd-party) · `[ ]` not started
     [x] TaskBoardProvider ABC + InternalBoardProvider (V1 behavior, unchanged)
     [x] NotionBoardProvider — real API client code — BLOCKED on credential
         for live verification; unit-tested against mocked Notion responses
-    [ ] Wiring: no endpoint/UI exists yet for a user to actually connect a
-        Notion workspace and have it used (the `Integration` model + a
-        connect flow). The provider code is real and tested in isolation
-        but not reachable by a real user through the product today.
+    [x] Wiring: POST/DELETE /integrations/notion/connect|notion, GET
+        /integrations — connect does a real live verification call before
+        saving anything. Suggestion approval now best-effort mirrors the
+        status change to Notion (services/taskboard/factory.py) via
+        title lookup — internal Task rows stay canonical; no persisted
+        Task-to-Notion-page mapping exists, so the mirror can only find
+        an existing page by title, never creates one (real, documented
+        limitation, not a placeholder) — no UI to drive this yet, API-only
     [-] Jira / Linear — deferred, see §9 (architecture supports adding them;
         not implemented this session — explicitly conditional in the brief:
         "if technically feasible" / "if time allows")
@@ -351,8 +355,8 @@ full live verification (real network call to a 3rd-party) · `[ ]` not started
 | Settings page real wiring | Out of scope for this session's V2 slice (not part of the GitHub-activity-to-task-board pipeline that is V2's actual differentiator); flagged, not fixed, to keep focus on the core mission. |
 | Full CI/CD (running this repo's tests on every push) | Would require adding repo secrets via GitHub's UI (an action only a human with repo admin access can do) — documented as a recommended next step, not performed. |
 | GitHub Action live end-to-end test on a hosted runner | The Action's shell script was verified for real (locally, against a live API instance and DB row — see docs/GITHUB_ACTION.md), but not fired against an actual GitHub-hosted Actions runner, since no repo had the workflow installed. |
-| Notion integration — connect-and-use flow | `NotionBoardProvider` is real and unit-tested (mocked Notion responses) but no endpoint/UI lets a user actually connect a workspace and have it used (would need the `Integration` model wired to a real connect flow) — the provider exists but isn't reachable by a real user yet. |
-| Frontend/UX for Phases 7/9/10 and richer Suggestion evidence | Every new backend capability this session (project intelligence, summaries, PR read API, action-token management) is reachable via API only — no Next.js page surfaces any of it yet. |
+| Notion sync — persisted page mapping, auto-create | The approval mirror (factory.py) matches an existing Notion page by title only; it never creates a new page for a task with no match. Adding a persisted `Task`-to-Notion-page-id mapping (and optionally create-on-first-sync) is the natural next step, deferred for scope. |
+| Frontend/UX for Phases 7/9/10 and richer Suggestion evidence | Every new backend capability this session (project intelligence, summaries, PR read API, action-token management, Notion connect) is reachable via API only — no Next.js page surfaces any of it yet. |
 
 ## 10. Testing Strategy
 
@@ -371,8 +375,8 @@ full live verification (real network call to a 3rd-party) · `[ ]` not started
 
 ## 11. Definition of Done (for this session's V2 slice)
 
-- [x] `pytest` passes (including new tests) — 98/98 as of the Phase 8
-  (GitHub Action) commit
+- [x] `pytest` passes (including new tests) — 106/106 as of the Phase 7
+  completion (Notion connect flow + mirror) commit
 - [x] `ruff check` clean across `src/` and `tests/`
 - [~] `mypy` — 27 errors, all pre-existing (SQLAlchemy string-forward-ref
   relationship warnings, one pre-existing `sort` key type-inference note in
