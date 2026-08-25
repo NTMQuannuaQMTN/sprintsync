@@ -98,4 +98,25 @@ behavior, no regression); approving with Notion connected calls
 a Notion API failure during the mirror does not revert or block the
 already-committed internal Task status change.
 
+## 2026-08-25 — Phase 11 (frontend) + Phase 6 completion (status-mapping endpoint)
+
+| Check | Command | Result |
+|---|---|---|
+| Backend lint | `.venv/bin/ruff check src/ tests/` | All checks passed |
+| Backend tests | `.venv/bin/pytest -q` | 109 passed (+4 for the new status-mapping PATCH endpoint, +1 net from removing the old no-op state and adding real coverage) |
+| Backend types | `.venv/bin/mypy src` | 27 errors, all pre-existing, none newly introduced |
+| Frontend types | `cd apps/web && npx tsc --noEmit` | Clean, after every frontend commit this pass (Suggestions evidence fix, Settings rewrite, repo Connections card, Intelligence page, Commits/PRs tab) |
+| Frontend build | `npm run build` | Succeeds after every frontend commit this pass; 15 routes (added `/repositories/[id]/intelligence`) |
+| Frontend dev-server smoke test | `npm run dev` + `curl` each new/changed route | `/settings`, `/repositories/[id]`, `/repositories/[id]/intelligence`, `/repositories/[id]/commits` all returned 200 with no server-side errors in the dev log |
+
+Known gap, honestly documented rather than silently skipped: no interactive
+browser testing was performed on any of this session's frontend work. This
+environment has no browser/screenshot tool available, and the app's
+client-side (not middleware) auth guard means a plain `curl` request never
+reaches the real authenticated UI — only "does the route compile and
+respond" was verifiable here, not "does clicking the button actually work
+end-to-end in a browser." The component logic was reviewed against the
+same `useQuery`/`useMutation` patterns already proven out elsewhere in this
+exact codebase (e.g. the Suggestions page's existing approve/reject flow).
+
 (Entries below are appended in order as V2 work proceeds.)
