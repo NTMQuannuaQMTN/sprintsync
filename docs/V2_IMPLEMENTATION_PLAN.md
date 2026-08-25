@@ -254,12 +254,33 @@ full live verification (real network call to a 3rd-party) · `[ ]` not started
     [x] Stale-task detection, unmatched-activity detection, unusually-
         large-change detection — pure DB queries, no LLM involved,
         GET /repositories/{id}/intelligence, fully tested against the real DB
-[ ] Phase 11 — Frontend / UX
+[x] Phase 11 — Frontend / UX
     [x] Error states added to Dashboard/Activity (Phase 1 work)
-    [ ] Not yet started this pass: surfacing sync history / AI decision /
-        confidence / summaries / project-intelligence data on any page —
-        every V2 backend feature above (Phases 7/9/10/Suggestion evidence)
-        is reachable via API only, not yet in the Next.js UI
+    [x] Fixed a real regression: Suggestions page's evidence display used
+        stale field names (matching_* vs the actual matched_*) after the
+        ai.py cleanup — silently stopped rendering for every suggestion
+        since; now shows source (llm/heuristic), work_type, explicit-
+        reference, matched keywords/files
+    [x] Settings page: replaced the fully-fake Notifications/AI
+        Settings/Appearance tabs (sliders/checkboxes with no backend) with
+        a real Integrations section wired to the Notion connect/disconnect
+        endpoints (live-verifies before saving)
+    [x] Repository detail page: new Connections card — webhook status +
+        reinstall (existing backend endpoint had no UI caller at all
+        until now), GitHub Action token generate/rotate/revoke with a
+        "shown once" copy flow
+    [x] New /repositories/[id]/intelligence page — stale tasks/unmatched
+        activity/large changes + day/week digest, explicitly labeled as
+        observed facts vs AI inference
+    [x] Commits page: added a Pull Requests tab (PRs were ingested since
+        Phase 3 but had no UI at all) + on-demand "Summarize" button on
+        both commits and PRs (lazy — a real LLM call, never prefetched)
+    [~] Not yet done: `tsc --noEmit`/`npm run build` are clean and each new
+        page was smoke-tested via the dev server (200, no console/server
+        errors), but no interactive browser testing was performed — this
+        session has no browser/screenshot tool, and the app's client-side
+        auth guard means an unauthenticated request never reaches real
+        rendered content
 [x] Phase 12 — Observability
     [x] Structured logging (structlog) now configured at app startup
         (src/core/logging.py — JSON in production, console in dev) and
@@ -356,7 +377,8 @@ full live verification (real network call to a 3rd-party) · `[ ]` not started
 | Full CI/CD (running this repo's tests on every push) | Would require adding repo secrets via GitHub's UI (an action only a human with repo admin access can do) — documented as a recommended next step, not performed. |
 | GitHub Action live end-to-end test on a hosted runner | The Action's shell script was verified for real (locally, against a live API instance and DB row — see docs/GITHUB_ACTION.md), but not fired against an actual GitHub-hosted Actions runner, since no repo had the workflow installed. |
 | Notion sync — persisted page mapping, auto-create | The approval mirror (factory.py) matches an existing Notion page by title only; it never creates a new page for a task with no match. Adding a persisted `Task`-to-Notion-page-id mapping (and optionally create-on-first-sync) is the natural next step, deferred for scope. |
-| Frontend/UX for Phases 7/9/10 and richer Suggestion evidence | Every new backend capability this session (project intelligence, summaries, PR read API, action-token management, Notion connect) is reachable via API only — no Next.js page surfaces any of it yet. |
+| Per-repository status-mapping config UI/API | `Repository.status_mapping` (Phase 6) is real and used by the backend (resolve_status, exercised in tests via a direct DB write), but no endpoint exists to set it through the product at all yet — not even API-only; a repo owner cannot currently change their own status mapping without a direct database write. |
+| Full-page daily/weekly digest on Dashboard | The digest banner lives on the new Intelligence page (per-repository); the cross-repo Dashboard doesn't show one. |
 
 ## 10. Testing Strategy
 

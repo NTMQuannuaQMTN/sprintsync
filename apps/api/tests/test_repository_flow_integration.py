@@ -11,8 +11,11 @@ import uuid
 from datetime import datetime, timezone
 
 import asyncpg
+from sqlalchemy import select
 
 from src.core.config import settings
+from src.core.database import AsyncSessionLocal
+from src.models.repository import Repository
 
 
 def _sign(payload_bytes: bytes) -> str:
@@ -264,4 +267,43 @@ async def test_reinstall_webhook_on_nonexistent_repo_id_is_404(client):
     """Ownership check runs before anything else — a repo_id that isn't
     this user's (or doesn't exist) must 404, never leak a GitHub call."""
     resp = await client.post(f"/api/v1/repositories/{uuid.uuid4()}/webhook/reinstall")
+    assert resp.status_code == 404
+
+
+async def test_update_status_mapping_merges_over_existing_keys(client, test_repo):
+    first = await client.patch(
+        f"/api/v1/repositories/{test_repo}/status-mapping",
+        json={"status_mapping": {"push": "blocked"}},
+    )
+    assert first.status_code == 200
+
+    second = await client.patch(
+        f"/api/v1/repositories/{test_repo}/status-mapping",
+        json={"status_mapping": {"pr_merged": "in_progress"}},
+    )
+    assert second.status_code == 200
+
+    repo = await client.get(f"/api/v1/repositories/{test_repo}")
+    # both keys survive -- the second PATCH must not have dropped the first.
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(select(Repository).where(Repository.id == test_repo))
+        row = result.scalar_one()
+        assert row.status_mapping == {"push": "blocked", "pr_merged": "in_progress"}
+    assert repo.status_code == 200
+
+
+async def test_update_status_mapping_rejects_invalid_status(client, test_repo):
+    resp = await client.patch(
+        f"/api/v1/repositories/{test_repo}/status-mapping",
+        json={"status_mapping": {"push": "in_review"}},
+    )
+    assert resp.status_code == 400
+    assert "in_review" in resp.json()["detail"]
+
+
+async def test_update_status_mapping_on_nonexistent_repo_id_is_404(client):
+    resp = await client.patch(
+        f"/api/v1/repositories/{uuid.uuid4()}/status-mapping",
+        json={"status_mapping": {"push": "blocked"}},
+    )
     assert resp.status_code == 404

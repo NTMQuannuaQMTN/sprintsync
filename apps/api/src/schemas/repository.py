@@ -39,6 +39,14 @@ class ActionTokenOut(BaseModel):
     action_token: str
 
 
+class StatusMappingUpdate(BaseModel):
+    """Partial override of DEFAULT_STATUS_MAPPING (src/services/
+    status_mapping.py) — keys not present here fall back to the default;
+    an unrecognized event key is stored but harmlessly ignored by
+    resolve_status."""
+    status_mapping: dict[str, str]
+
+
 class GitHubRepoItem(BaseModel):
     """GitHub API repo shape for listing available repos."""
     id: int

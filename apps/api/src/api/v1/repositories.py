@@ -15,7 +15,7 @@ from src.models.profile import Profile
 from src.models.repository import Repository
 from src.models.task import Task, TaskStatus
 from src.models.suggestion import Suggestion, SuggestionStatus
-from src.schemas.repository import ActionTokenOut, RepositoryOut, GitHubRepoItem
+from src.schemas.repository import ActionTokenOut, RepositoryOut, GitHubRepoItem, StatusMappingUpdate
 from src.services.github import GitHubService
 from src.models.activity_log import ActivityLog, ActivityType
 
@@ -297,6 +297,43 @@ async def reinstall_webhook(
     repo_out.task_count = task_result.scalar() or 0
     repo_out.done_count = done_result.scalar() or 0
     repo_out.pending_suggestions = pending_result.scalar() or 0
+    repo_out.has_action_token = bool(repo.action_token)
+    return repo_out
+
+
+@router.patch("/{repo_id}/status-mapping", response_model=RepositoryOut)
+async def update_status_mapping(
+    repo_id: uuid.UUID,
+    body: StatusMappingUpdate,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Set this repo's event->task-status override (Phase 6). Merges over
+    (doesn't replace) the existing mapping, so setting one key never drops
+    another the user configured earlier. Every value must be a real
+    TaskStatus — an unrecognized status is rejected here rather than
+    silently ignored later by resolve_status, since that would look like
+    the setting was accepted when it wasn't."""
+    result = await db.execute(
+        select(Repository).where(Repository.id == repo_id, Repository.owner_id == user_id)
+    )
+    repo = result.scalar_one_or_none()
+    if not repo:
+        raise HTTPException(status_code=404, detail="Repository not found")
+
+    valid_statuses = {s.value for s in TaskStatus}
+    invalid = {v for v in body.status_mapping.values() if v not in valid_statuses}
+    if invalid:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Not a valid task status: {', '.join(sorted(invalid))}. Valid: {', '.join(sorted(valid_statuses))}",
+        )
+
+    repo.status_mapping = {**(repo.status_mapping or {}), **body.status_mapping}
+    await db.commit()
+    await db.refresh(repo)
+
+    repo_out = RepositoryOut.model_validate(repo)
     repo_out.has_action_token = bool(repo.action_token)
     return repo_out
 
