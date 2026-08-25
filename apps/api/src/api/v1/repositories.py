@@ -2,6 +2,7 @@
 import uuid
 from typing import List
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
@@ -253,6 +254,23 @@ async def reinstall_webhook(
         hook = await gh.install_webhook(repo.full_name, webhook_url)
         repo.webhook_id = hook["id"]
         repo.webhook_active = True
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 404:
+            # GitHub 404s the /hooks endpoint (rather than 403) when the
+            # token's holder lacks admin rights on the repo — the common
+            # case being a repo you're a collaborator on but don't own.
+            # Managing webhooks specifically requires admin, unlike most
+            # other things this app does (reading commits, pushing, etc).
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "GitHub rejected the webhook install — this usually means you have "
+                    "collaborator access to this repo but not admin access. Only a repo "
+                    "admin/owner can install webhooks; ask them to connect it instead, "
+                    "or grant you admin access."
+                ),
+            )
+        raise HTTPException(status_code=502, detail=f"Could not install webhook on GitHub: {e}")
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Could not install webhook on GitHub: {e}")
     finally:

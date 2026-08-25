@@ -247,3 +247,21 @@ async def test_list_commits_still_returns_locally_stored_commits_without_a_githu
     assert listed.status_code == 200
     messages = [c["message"] for c in listed.json()]
     assert "Existing commit stored before any sync" in messages
+
+
+async def test_reinstall_webhook_requires_a_real_github_token(client, test_repo):
+    """test_repo's owning profile has no github_access_token (see the test
+    above) — the same real-world state as a user who hasn't finished
+    /auth/sync yet. reinstall_webhook must refuse with a clear 400, not
+    attempt a GitHub call with no token (which would otherwise send
+    "Authorization: Bearer None")."""
+    resp = await client.post(f"/api/v1/repositories/{test_repo}/webhook/reinstall")
+    assert resp.status_code == 400
+    assert "access token" in resp.json()["detail"].lower()
+
+
+async def test_reinstall_webhook_on_nonexistent_repo_id_is_404(client):
+    """Ownership check runs before anything else — a repo_id that isn't
+    this user's (or doesn't exist) must 404, never leak a GitHub call."""
+    resp = await client.post(f"/api/v1/repositories/{uuid.uuid4()}/webhook/reinstall")
+    assert resp.status_code == 404

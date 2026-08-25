@@ -36,6 +36,9 @@ class Suggestion(UUIDMixin, TimestampMixin, Base):
     commit_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("commits.id", ondelete="SET NULL"), nullable=True
     )
+    pull_request_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pull_requests.id", ondelete="SET NULL"), nullable=True
+    )
     # References auth.users(id) — see models/profile.py for why there's no
     # SQLAlchemy ForeignKey() wrapper on this column.
     reviewed_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
@@ -66,6 +69,9 @@ class Suggestion(UUIDMixin, TimestampMixin, Base):
     repository: Mapped["Repository"] = relationship("Repository", back_populates="suggestions")  # noqa: F821
     task: Mapped[Optional["Task"]] = relationship("Task", back_populates="suggestions")  # noqa: F821
     commit: Mapped[Optional["Commit"]] = relationship("Commit", back_populates="suggestions")  # noqa: F821
+    pull_request: Mapped[Optional["PullRequest"]] = relationship(  # noqa: F821
+        "PullRequest", back_populates="suggestions"
+    )
 
     __table_args__ = (
         Index("ix_suggestions_repository_status", "repository_id", "status"),

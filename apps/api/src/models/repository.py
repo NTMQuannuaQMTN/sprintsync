@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import String, Text, Boolean, Integer, DateTime, Index
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.core.database import Base
@@ -46,6 +46,14 @@ class Repository(UUIDMixin, TimestampMixin, Base):
     # of only on a cooldown. See COMMIT_SYNC_COOLDOWN_SECONDS in commits.py.
     last_commit_sync_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # V2: per-repo override for which task status an event maps to (push,
+    # pr_opened, pr_merged, ...). Merged over DEFAULT_STATUS_MAPPING
+    # (services/status_mapping.py) — an unset key here falls back to the
+    # default rather than every repo needing every key. Never destroys a
+    # user's own workflow: this only ever supplies AI *suggestions*, which
+    # still require human approval before any Task row actually changes.
+    status_mapping: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+
     # Relationships
     project_specs: Mapped[list["ProjectSpecification"]] = relationship(  # noqa: F821
         "ProjectSpecification", back_populates="repository", cascade="all, delete-orphan"
@@ -55,6 +63,9 @@ class Repository(UUIDMixin, TimestampMixin, Base):
     )
     commits: Mapped[list["Commit"]] = relationship(  # noqa: F821
         "Commit", back_populates="repository", cascade="all, delete-orphan"
+    )
+    pull_requests: Mapped[list["PullRequest"]] = relationship(  # noqa: F821
+        "PullRequest", back_populates="repository", cascade="all, delete-orphan"
     )
     suggestions: Mapped[list["Suggestion"]] = relationship(  # noqa: F821
         "Suggestion", back_populates="repository", cascade="all, delete-orphan"

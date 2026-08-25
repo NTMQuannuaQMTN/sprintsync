@@ -17,6 +17,7 @@ PyPDF2==3.0.1
 supabase==2.9.1
 passlib[bcrypt]==1.7.4
 structlog==24.4.0
+anthropic==1.0.0
 
 # Dev/test only — not needed by the deployed app itself, but pinned here
 # since this repo has no separate dev-requirements file. Without these,
