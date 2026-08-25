@@ -109,9 +109,18 @@ class GitHubService:
 
 
 def verify_webhook_signature(payload: bytes, signature: str) -> bool:
-    """Verify GitHub webhook HMAC-SHA256 signature."""
+    """Verify GitHub webhook HMAC-SHA256 signature.
+
+    Fails CLOSED when GITHUB_WEBHOOK_SECRET is unset — rejects every
+    request rather than accepting everything unsigned. This used to fail
+    open ("skip in dev if not configured"), which is exactly how this
+    endpoint ended up accepting forged requests in production: the secret
+    was simply never set, and the lenient default silently made that look
+    fine. Local dev just needs its own real secret in .env now (a one-line,
+    one-time cost) — there is no safe version of "verification is optional."
+    """
     if not settings.GITHUB_WEBHOOK_SECRET:
-        return True  # skip in dev if not configured
+        return False
     expected = "sha256=" + hmac.new(
         settings.GITHUB_WEBHOOK_SECRET.encode(),
         payload,

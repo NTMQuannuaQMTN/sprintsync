@@ -101,7 +101,12 @@ async def _sync_commits_from_github(repo: Repository, db: AsyncSession) -> None:
 
             additions = deletions = 0
             files: list = []
-            if not isinstance(detail, Exception):
+            # isinstance(detail, dict) — a positive check, not "not an
+            # Exception" — is what actually lets mypy narrow `detail` here;
+            # asyncio.gather(..., return_exceptions=True) types each result
+            # as dict | BaseException, and "not Exception" doesn't rule out
+            # every BaseException subtype.
+            if isinstance(detail, dict):
                 stats = detail.get("stats", {})
                 additions = stats.get("additions", 0)
                 deletions = stats.get("deletions", 0)

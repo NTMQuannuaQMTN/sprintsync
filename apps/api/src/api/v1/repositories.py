@@ -118,6 +118,8 @@ async def connect_repository(
 ):
     """Connect a GitHub repository to SprintSync."""
     user = await _get_user(user_id, db)
+    if not user.github_access_token:
+        raise HTTPException(status_code=400, detail="No GitHub access token — please sign in again")
 
     # Check if already connected
     existing = await db.execute(
@@ -210,6 +212,71 @@ async def get_repository(
     return repo_out
 
 
+@router.post("/{repo_id}/webhook/reinstall", response_model=RepositoryOut)
+async def reinstall_webhook(
+    repo_id: uuid.UUID,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Install (or replace) this repo's GitHub webhook — the only way to fix
+    a repo that was connected while GITHUB_WEBHOOK_SECRET was unset (which
+    made connect_repository silently skip webhook install entirely), without
+    the destructive disconnect+reconnect that would cascade-delete its
+    tasks/commits/suggestions history.
+    """
+    result = await db.execute(
+        select(Repository).where(Repository.id == repo_id, Repository.owner_id == user_id)
+    )
+    repo = result.scalar_one_or_none()
+    if not repo:
+        raise HTTPException(status_code=404, detail="Repository not found")
+    if not settings.GITHUB_WEBHOOK_SECRET:
+        raise HTTPException(
+            status_code=400,
+            detail="GITHUB_WEBHOOK_SECRET is not configured on the server — set it before installing webhooks",
+        )
+
+    user = await _get_user(user_id, db)
+    if not user.github_access_token:
+        raise HTTPException(status_code=400, detail="No GitHub access token — please sign in again")
+
+    gh = GitHubService(user.github_access_token)
+    try:
+        # Replace any stale/broken hook rather than accumulating duplicates.
+        if repo.webhook_id:
+            try:
+                await gh.delete_webhook(repo.full_name, repo.webhook_id)
+            except Exception:
+                pass  # already gone, or we never actually had a valid one — fine either way
+
+        webhook_url = f"{settings.FRONTEND_URL}/api/v1/webhook/github"
+        hook = await gh.install_webhook(repo.full_name, webhook_url)
+        repo.webhook_id = hook["id"]
+        repo.webhook_active = True
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Could not install webhook on GitHub: {e}")
+    finally:
+        await gh.close()
+
+    await db.commit()
+    await db.refresh(repo)
+
+    task_result = await db.execute(select(func.count(Task.id)).where(Task.repository_id == repo_id))
+    done_result = await db.execute(
+        select(func.count(Task.id)).where(Task.repository_id == repo_id, Task.status == TaskStatus.DONE)
+    )
+    pending_result = await db.execute(
+        select(func.count(Suggestion.id)).where(
+            Suggestion.repository_id == repo_id, Suggestion.status == SuggestionStatus.PENDING
+        )
+    )
+    repo_out = RepositoryOut.model_validate(repo)
+    repo_out.task_count = task_result.scalar() or 0
+    repo_out.done_count = done_result.scalar() or 0
+    repo_out.pending_suggestions = pending_result.scalar() or 0
+    return repo_out
+
+
 @router.delete("/{repo_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def disconnect_repository(
     repo_id: uuid.UUID,
@@ -226,13 +293,14 @@ async def disconnect_repository(
     # Remove webhook
     if repo.webhook_id and repo.webhook_active:
         user = await _get_user(user_id, db)
-        gh = GitHubService(user.github_access_token)
-        try:
-            await gh.delete_webhook(repo.full_name, repo.webhook_id)
-        except Exception:
-            pass
-        finally:
-            await gh.close()
+        if user.github_access_token:
+            gh = GitHubService(user.github_access_token)
+            try:
+                await gh.delete_webhook(repo.full_name, repo.webhook_id)
+            except Exception:
+                pass
+            finally:
+                await gh.close()
 
     await db.delete(repo)
     await db.commit()

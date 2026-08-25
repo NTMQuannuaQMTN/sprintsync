@@ -4,12 +4,30 @@ why JWT verification is bypassed via dependency override rather than a
 forged token, and test_auth_integration.py for the equivalent on the auth
 endpoints.
 """
+import hashlib
+import hmac
+import json
 import uuid
 from datetime import datetime, timezone
 
 import asyncpg
 
 from src.core.config import settings
+
+
+def _sign(payload_bytes: bytes) -> str:
+    """Real HMAC-SHA256 signature matching what verify_webhook_signature
+    (github.py) expects — the endpoint now fails closed without one (see
+    BUG: webhook signature bypass, fixed this session), so any test hitting
+    /webhook/github for real needs a genuine signature, not just a header."""
+    if not settings.GITHUB_WEBHOOK_SECRET:
+        raise RuntimeError(
+            "GITHUB_WEBHOOK_SECRET must be set in apps/api/.env to run this test — "
+            "the webhook endpoint now rejects everything when it's unset."
+        )
+    return "sha256=" + hmac.new(
+        settings.GITHUB_WEBHOOK_SECRET.encode(), payload_bytes, hashlib.sha256
+    ).hexdigest()
 
 
 def _asyncpg_dsn() -> str:
@@ -130,10 +148,15 @@ async def test_webhook_creates_commit_and_suggestion_then_approve_flow(client, t
             }
         ],
     }
+    payload_bytes = json.dumps(payload).encode()
     webhook_resp = await client.post(
         "/api/v1/webhook/github",
-        json=payload,
-        headers={"X-GitHub-Event": "push"},
+        content=payload_bytes,
+        headers={
+            "Content-Type": "application/json",
+            "X-GitHub-Event": "push",
+            "X-Hub-Signature-256": _sign(payload_bytes),
+        },
     )
     assert webhook_resp.status_code == 200
     body = webhook_resp.json()
