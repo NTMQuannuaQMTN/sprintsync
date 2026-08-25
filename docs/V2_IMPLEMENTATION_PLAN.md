@@ -215,22 +215,29 @@ full live verification (real network call to a 3rd-party) · `[ ]` not started
     [x] TaskBoardProvider ABC + InternalBoardProvider (V1 behavior, unchanged)
     [x] NotionBoardProvider — real API client code — BLOCKED on credential
         for live verification; unit-tested against mocked Notion responses
+    [ ] Wiring: no endpoint/UI exists yet for a user to actually connect a
+        Notion workspace and have it used (the `Integration` model + a
+        connect flow). The provider code is real and tested in isolation
+        but not reachable by a real user through the product today.
     [-] Jira / Linear — deferred, see §9 (architecture supports adding them;
         not implemented this session — explicitly conditional in the brief:
         "if technically feasible" / "if time allows")
-[x] Phase 8 — GitHub Action
-    [x] action.yml + example workflow + docs (no credential needed to author)
-[~] Phase 9 — AI summarization
-    [x] Commit/PR/daily summary functions — same LLM-or-fallback pattern as
-        Phase 4, same credential blocker for live LLM verification
-[x] Phase 10 — Project intelligence
-    [x] Stale-task detection, unmatched-commit detection (pure DB queries,
-        fully verified, no external credential needed)
-[x] Phase 11 — Frontend / UX
-    [x] Sync history / AI decision surface on Suggestions page
-    [x] Error states added to Dashboard/Activity
-[x] Phase 12 — Observability
-    [x] Structured logging (structlog) through the ingestion → reasoning →
+[ ] Phase 8 — GitHub Action
+    [ ] action.yml + example workflow + docs — not yet started
+[ ] Phase 9 — AI summarization
+    [ ] Commit/PR/daily summary functions — not yet started
+[ ] Phase 10 — Project intelligence
+    [ ] Stale-task detection, unmatched-commit detection — not yet started
+[~] Phase 11 — Frontend / UX
+    [x] Error states added to Dashboard/Activity (Phase 1 work)
+    [ ] Sync history / AI decision / confidence surface on Suggestions page —
+        not yet started; Suggestion rows now carry richer evidence
+        (work_type, confidence_tier, llm-vs-heuristic source) that the UI
+        doesn't display yet
+[~] Phase 12 — Observability
+    [ ] Structured logging exists (`structlog` import in reasoning.py) but is
+        wired at exactly one call site (`llm_call_failed_falling_back_to_
+        heuristic`) — not yet through the full ingestion → reasoning →
         matching → sync pipeline
 [x] Phase 13 — Security
     [x] Prompt-injection boundary audit + fix (repo content never enters the
@@ -337,13 +344,17 @@ full live verification (real network call to a 3rd-party) · `[ ]` not started
 
 ## 11. Definition of Done (for this session's V2 slice)
 
-- [x] `pytest` passes (including new tests)
+- [x] `pytest` passes (including new tests) — 71/71 as of the diff-excerpt
+  fix + ai.py dead-code removal commit
 - [x] `ruff check` clean
-- [x] `mypy` — no new errors introduced beyond the pre-existing 26 (tracked,
-  not newly caused)
-- [x] `tsc --noEmit` clean
-- [x] `npm run build` succeeds
+- [~] `mypy` — 23 errors, all pre-existing SQLAlchemy string-forward-ref
+  relationship warnings unrelated to V2 changes (tracked, not newly caused)
+- [ ] `tsc --noEmit` / `npm run build` — not re-verified since Phase 11
+  frontend work hasn't started; last known-good was pre-Phase-3
 - [x] Webhook signature bypass fixed and verified live against production
-- [x] `docs/V2_IMPLEMENTATION_PLAN.md` (this file) accurate and current
-- [x] `docs/V2_TEST_REPORT.md` populated with real run output
-- [x] README updated to reflect V2 architecture and honest limitations
+- [~] `docs/V2_IMPLEMENTATION_PLAN.md` (this file) — corrected 2026-08-25
+  after finding Phases 8-12 were marked done without the code existing;
+  now reflects actual state
+- [ ] `docs/V2_TEST_REPORT.md` — still only has the original baseline, not
+  yet appended with this session's actual runs (see doc itself)
+- [ ] README — not yet updated for V2
