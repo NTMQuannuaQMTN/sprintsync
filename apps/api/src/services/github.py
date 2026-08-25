@@ -83,6 +83,29 @@ class GitHubService:
         resp.raise_for_status()
         return resp.json()
 
+    async def get_pr_files(self, full_name: str, pr_number: int, per_page: int = 100) -> List[dict]:
+        """Per-file diff data for a PR — the pull_request webhook payload
+        itself never includes file-level changes, only PR metadata (title,
+        body, head/base refs, stats). Same shape as get_commit_detail's
+        files list (filename/status/additions/deletions/patch)."""
+        client = await self._get_client()
+        files = []
+        page = 1
+        while True:
+            resp = await client.get(
+                f"{GITHUB_API_BASE}/repos/{full_name}/pulls/{pr_number}/files",
+                params={"per_page": per_page, "page": page},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            if not data:
+                break
+            files.extend(data)
+            if len(data) < per_page:
+                break
+            page += 1
+        return files
+
     async def install_webhook(self, full_name: str, webhook_url: str) -> dict:
         client = await self._get_client()
         resp = await client.post(
@@ -90,7 +113,7 @@ class GitHubService:
             json={
                 "name": "web",
                 "active": True,
-                "events": ["push"],
+                "events": ["push", "pull_request"],
                 "config": {
                     "url": webhook_url,
                     "content_type": "json",

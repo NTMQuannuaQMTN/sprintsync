@@ -16,6 +16,7 @@ class ActivityType(str, enum.Enum):
     SPEC_UPLOADED = "spec_uploaded"
     TASKS_GENERATED = "tasks_generated"
     COMMIT_RECEIVED = "commit_received"
+    PR_RECEIVED = "pr_received"
     SUGGESTION_CREATED = "suggestion_created"
     SUGGESTION_APPROVED = "suggestion_approved"
     SUGGESTION_REJECTED = "suggestion_rejected"
