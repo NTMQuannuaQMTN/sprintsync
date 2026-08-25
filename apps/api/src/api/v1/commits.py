@@ -17,7 +17,7 @@ from src.models.suggestion import Suggestion, SuggestionAction
 from src.models.activity_log import ActivityLog, ActivityType
 from src.models.profile import Profile
 from src.schemas.commit import CommitOut, CommitAnalyzeResult
-from src.services.ai import ai_service
+from src.services.ai_reasoning.reasoning import analyze_activity
 from src.services.github import GitHubService
 
 router = APIRouter(prefix="/repositories/{repo_id}/commits", tags=["commits"])
@@ -198,10 +198,15 @@ async def analyze_commits(
 
     suggestions_created = 0
     for commit in commits:
-        suggested = await ai_service.analyze_commit(
-            commit_message=commit.message,
-            files_changed=commit.files_changed or [],
+        files_changed = commit.files_changed or []
+        suggested = await analyze_activity(
+            activity_type="commit",
+            text_signals=[commit.message],
             tasks=tasks_plain,
+            event_key="push",
+            changed_files=[f.get("filename", "") for f in files_changed],
+            files_with_patches=files_changed,
+            repo_status_mapping=repo.status_mapping,
         )
         for s in suggested:
             db.add(Suggestion(

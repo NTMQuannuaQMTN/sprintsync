@@ -203,6 +203,7 @@ async def _handle_push(payload: dict, repo: Repository, db: AsyncSession) -> dic
                 tasks=tasks_plain,
                 event_key="push",
                 changed_files=[f["filename"] for f in all_files],
+                files_with_patches=all_files,
                 repo_status_mapping=repo.status_mapping,
             )
 
@@ -358,6 +359,7 @@ async def _handle_pull_request(payload: dict, repo: Repository, db: AsyncSession
         tasks=tasks_plain,
         event_key=event_key,
         changed_files=[f["filename"] for f in files_changed],
+        files_with_patches=files_changed,
         repo_status_mapping=repo.status_mapping,
     )
 

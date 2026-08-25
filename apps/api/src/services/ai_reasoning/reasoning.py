@@ -23,7 +23,7 @@ import structlog
 
 from src.models.task import TaskStatus
 from src.services import task_matching
-from src.services.ai_reasoning.prompt import build_prompt
+from src.services.ai_reasoning.prompt import build_diff_excerpt, build_prompt
 from src.services.ai_reasoning.schema import ActivityAnalysis, ConfidenceTier, confidence_tier
 from src.services.status_mapping import resolve_status
 
@@ -43,17 +43,25 @@ async def analyze_activity(
     tasks: List[dict],
     event_key: str,
     changed_files: Optional[List[str]] = None,
+    files_with_patches: Optional[List[dict]] = None,
     repo_status_mapping: Optional[dict] = None,
 ) -> List[dict]:
     """activity_type: "commit" | "pull_request". text_signals: e.g. a
     commit's [message], or a PR's [title, body, branch_name]. event_key:
     e.g. "push" | "pr_opened" | "pr_merged" — resolved to a proposed status
     via status_mapping.resolve_status when the model doesn't (or can't)
-    confidently propose its own."""
+    confidently propose its own. files_with_patches: the same
+    {filename, status, additions, deletions, patch} shape stored on
+    Commit/PullRequest.files_changed — this is what actually lets the LLM
+    path judge a completion claim against the real diff instead of trusting
+    the message/title alone; the heuristic path doesn't use patch content
+    (it never did), only changed_files (filenames)."""
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if api_key:
         try:
-            analysis = await _analyze_with_llm(api_key, activity_type, text_signals, tasks, changed_files)
+            analysis = await _analyze_with_llm(
+                api_key, activity_type, text_signals, tasks, changed_files, files_with_patches
+            )
             return _finalize_llm(analysis, event_key, repo_status_mapping)
         except Exception as e:
             logger.warning(
@@ -70,6 +78,7 @@ async def _analyze_with_llm(
     text_signals: List[str],
     tasks: List[dict],
     changed_files: Optional[List[str]],
+    files_with_patches: Optional[List[dict]],
 ) -> ActivityAnalysis:
     from anthropic import AsyncAnthropic  # lazy import — optional dependency, only needed on this path
 
@@ -77,7 +86,8 @@ async def _analyze_with_llm(
         raise ValueError("No open tasks to analyze against")
 
     activity_text = "\n\n---\n\n".join(s for s in text_signals if s) or "(no text content)"
-    system, user = build_prompt(activity_type, activity_text, tasks, changed_files)
+    diff_excerpt = build_diff_excerpt(files_with_patches) if files_with_patches else None
+    system, user = build_prompt(activity_type, activity_text, tasks, changed_files, diff_excerpt)
 
     client = AsyncAnthropic(api_key=api_key)
     async with client.messages.stream(

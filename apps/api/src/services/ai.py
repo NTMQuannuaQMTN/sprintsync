@@ -1,7 +1,8 @@
-"""AI service — task extraction from documents and commit analysis.
+"""AI service — task extraction from spec documents (spec upload feature).
 
-Uses a simple heuristic/pattern-based approach as a placeholder.
-Replace with actual LLM (Tencent WorkBuddy / OpenAI) calls.
+Uses a simple heuristic/pattern-based approach. Commit/PR activity analysis
+now lives in src/services/ai_reasoning/ (structured LLM output with a
+heuristic fallback via task_matching.py) — this module no longer handles it.
 """
 import re
 from typing import List
@@ -92,77 +93,6 @@ class AIService:
 
         return tasks[:50]  # cap at 50 tasks per spec
 
-    async def analyze_commit(
-        self,
-        commit_message: str,
-        files_changed: List[dict],
-        tasks: List[dict],
-    ) -> List[dict]:
-        """
-        Analyze a commit and return suggested task updates.
-
-        Returns list of dicts: {task_id, proposed_status, confidence, explanation, evidence}
-        """
-        suggestions = []
-
-        if not tasks:
-            return suggestions
-
-        commit_lower = commit_message.lower()
-        files = [f.get("filename", "") for f in (files_changed or [])]
-
-        # Heuristic: look for completion indicators
-        completion_keywords = [
-            "implement", "add", "complete", "finish", "done", "fix",
-            "resolve", "close", "merge", "integrate", "setup", "create",
-        ]
-        is_completion = any(k in commit_lower for k in completion_keywords)
-
-        for task in tasks:
-            if task.get("status") in ("done", "cancelled"):
-                continue
-
-            task_lower = task["title"].lower()
-            confidence = 0.0
-            matched_reasons = []
-
-            # Title word overlap
-            task_words = set(re.findall(r"\b\w{4,}\b", task_lower))
-            commit_words = set(re.findall(r"\b\w{4,}\b", commit_lower))
-            overlap = task_words & commit_words
-            if overlap:
-                confidence += min(0.4, len(overlap) * 0.1)
-                matched_reasons.append(f"Keywords match: {', '.join(list(overlap)[:3])}")
-
-            # File name hints
-            file_hints = [f for f in files if any(w in f for w in list(task_words)[:5])]
-            if file_hints:
-                confidence += 0.3
-                matched_reasons.append(f"Files changed: {', '.join(file_hints[:3])}")
-
-            # Completion signal
-            if is_completion and confidence > 0:
-                confidence += 0.2
-
-            if confidence >= 0.5:
-                proposed = "done" if is_completion else "in_progress"
-                suggestions.append({
-                    "task_id": task["id"],
-                    "proposed_status": proposed,
-                    "confidence": round(min(confidence, 0.95), 2),
-                    "explanation": self._build_explanation(commit_message, matched_reasons, proposed),
-                    "evidence": {
-                        "commit_message": commit_message,
-                        "matching_files": file_hints[:5],
-                        "matching_keywords": list(overlap)[:5],
-                        "reasoning": matched_reasons,
-                    },
-                })
-
-        # Sort by confidence
-        suggestions.sort(key=lambda x: x["confidence"], reverse=True)
-        return suggestions[:5]  # top 5 per commit
-
     def _infer_priority(self, title: str) -> TaskPriority:
         t = title.lower()
         if any(k in t for k in ["critical", "urgent", "security", "auth", "login", "payment", "crash"]):
@@ -188,14 +118,5 @@ class AIService:
             if any(k in t for k in keywords):
                 tags.append(tag)
         return tags
-
-    def _build_explanation(self, commit_msg: str, reasons: List[str], proposed: str) -> str:
-        action = "completed" if proposed == "done" else "started working on"
-        reasons_str = "; ".join(reasons) if reasons else "keyword and file analysis"
-        return (
-            f"Based on commit '{commit_msg[:60]}...', the developer appears to have {action} this task. "
-            f"Evidence: {reasons_str}."
-        )
-
 
 ai_service = AIService()
