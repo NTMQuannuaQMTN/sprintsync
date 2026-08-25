@@ -20,6 +20,7 @@ class RepositoryOut(RepositoryBase):
     id: uuid.UUID
     github_repo_id: int
     webhook_active: bool
+    has_action_token: bool = False
     health_score: Optional[int] = None
     created_at: datetime
     updated_at: datetime
@@ -32,6 +33,10 @@ class RepositoryOut(RepositoryBase):
     recent_commit_message: Optional[str] = None
 
     model_config = {"from_attributes": True}
+
+
+class ActionTokenOut(BaseModel):
+    action_token: str
 
 
 class GitHubRepoItem(BaseModel):

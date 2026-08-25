@@ -1,0 +1,59 @@
+name: "SprintSync Sync"
+description: >-
+  Forwards this repository's push/pull_request events to your SprintSync
+  deployment for AI-driven task matching and task-board sync — a
+  developer-native alternative to installing a GitHub webhook, usable by
+  anyone who can add a repo secret, without SprintSync needing any GitHub
+  App/OAuth permission on this repository.
+author: "SprintSync"
+branding:
+  icon: "git-pull-request"
+  color: "purple"
+
+inputs:
+  api_url:
+    description: >-
+      Base URL of your SprintSync API deployment, e.g.
+      https://your-project.vercel.app (no trailing slash).
+    required: true
+  token:
+    description: >-
+      This repository's SprintSync action token. Generate one from
+      SprintSync (POST /api/v1/repositories/{id}/action-token, or the
+      repository's Settings page once the frontend exposes it), then store
+      it as a repo/organization secret — never commit it directly.
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Forward event to SprintSync
+      shell: bash
+      env:
+        SPRINTSYNC_API_URL: ${{ inputs.api_url }}
+        SPRINTSYNC_TOKEN: ${{ inputs.token }}
+        GH_EVENT_NAME: ${{ github.event_name }}
+        GH_DELIVERY_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+      run: |
+        set -euo pipefail
+
+        BODY=$(jq -n \
+          --argjson payload "$(cat "${GITHUB_EVENT_PATH}")" \
+          --arg event_name "${GH_EVENT_NAME}" \
+          --arg delivery_id "${GH_DELIVERY_ID}" \
+          '{event_name: $event_name, delivery_id: $delivery_id, payload: $payload}')
+
+        HTTP_STATUS=$(curl -sS -o /tmp/sprintsync_response.json -w "%{http_code}" \
+          --max-time 20 \
+          -X POST "${SPRINTSYNC_API_URL}/api/v1/webhook/action" \
+          -H "Authorization: Bearer ${SPRINTSYNC_TOKEN}" \
+          -H "Content-Type: application/json" \
+          -d "${BODY}")
+
+        echo "SprintSync responded with HTTP ${HTTP_STATUS}:"
+        cat /tmp/sprintsync_response.json
+
+        if [ "${HTTP_STATUS}" -ge 400 ]; then
+          echo "::error::SprintSync rejected this event (HTTP ${HTTP_STATUS}). Check that the token is current and not revoked/rotated."
+          exit 1
+        fi

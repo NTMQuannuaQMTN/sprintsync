@@ -1,0 +1,26 @@
+# Example workflow for the SprintSync GitHub Action.
+#
+# Copy this file to .github/workflows/sprintsync-sync.yml in the repository
+# you want SprintSync to watch, then:
+#   1. Generate an action token: POST /api/v1/repositories/{repo_id}/action-token
+#      against your SprintSync deployment (see docs/GITHUB_ACTION.md).
+#   2. Add it as a repository secret named SPRINTSYNC_TOKEN
+#      (Settings > Secrets and variables > Actions > New repository secret).
+#   3. Set SPRINTSYNC_API_URL below to your deployment's base URL.
+#   4. Push a commit or open a PR — check the workflow run's logs.
+name: SprintSync Sync
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    types: [opened, synchronize, closed, reopened]
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: NTMQuannuaQMTN/sprintsync@main
+        with:
+          api_url: "https://your-sprintsync-deployment.vercel.app"
+          token: ${{ secrets.SPRINTSYNC_TOKEN }}

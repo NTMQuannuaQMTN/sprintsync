@@ -65,15 +65,41 @@ async def _is_duplicate_delivery(
     return False
 
 
+async def _dispatch_event(event_type: str, delivery_id: str, payload: dict, repo: Repository, db: AsyncSession, log) -> dict:
+    """Shared by both ingestion paths (signed GitHub webhook, and the
+    token-authenticated GitHub Action endpoint below) once each has
+    independently established which repo the event belongs to."""
+    if await _is_duplicate_delivery(db, delivery_id, event_type, repo.id):
+        await db.commit()
+        log.info("webhook.duplicate_delivery_ignored")
+        return {"status": "duplicate", "delivery_id": delivery_id}
+
+    log.info("webhook.received")
+    if event_type == "push":
+        response_body = await _handle_push(payload, repo, db)
+    elif event_type == "pull_request":
+        response_body = await _handle_pull_request(payload, repo, db)
+    else:
+        await db.commit()  # still persist the delivery record even for ignored events
+        log.info("webhook.ignored")
+        return {"status": "ignored", "event": event_type}
+
+    await db.commit()
+    log.info("webhook.processed", **{k: v for k, v in response_body.items() if k != "status"})
+    return response_body
+
+
 @router.post("/github")
 async def github_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     """Receive GitHub webhook push/pull_request events and create AI
-    suggestions."""
+    suggestions. Requires the repo's webhook to actually be installed
+    (admin-on-repo access) — see /webhook/action for the alternative path
+    that doesn't."""
     body = await request.body()
 
     event_type = request.headers.get("X-GitHub-Event", "")
     delivery_id = request.headers.get("X-GitHub-Delivery", "")
-    log = logger.bind(event_type=event_type, delivery_id=delivery_id)
+    log = logger.bind(event_type=event_type, delivery_id=delivery_id, source="github_webhook")
 
     signature = request.headers.get("X-Hub-Signature-256", "")
     if not verify_webhook_signature(body, signature):
@@ -98,24 +124,52 @@ async def github_webhook(request: Request, db: AsyncSession = Depends(get_db)):
         log.info("webhook.skipped", reason="repo not connected")
         return {"status": "skipped", "reason": "repo not connected"}
 
-    if await _is_duplicate_delivery(db, delivery_id, event_type, repo.id):
-        await db.commit()
-        log.info("webhook.duplicate_delivery_ignored")
-        return {"status": "duplicate", "delivery_id": delivery_id}
+    return await _dispatch_event(event_type, delivery_id, payload, repo, db, log)
 
-    log.info("webhook.received")
-    if event_type == "push":
-        response_body = await _handle_push(payload, repo, db)
-    elif event_type == "pull_request":
-        response_body = await _handle_pull_request(payload, repo, db)
-    else:
-        await db.commit()  # still persist the delivery record even for ignored events
-        log.info("webhook.ignored")
-        return {"status": "ignored", "event": event_type}
 
-    await db.commit()
-    log.info("webhook.processed", **{k: v for k, v in response_body.items() if k != "status"})
-    return response_body
+@router.post("/action")
+async def github_action_webhook(request: Request, db: AsyncSession = Depends(get_db)):
+    """Receive events forwarded by SprintSync's own GitHub Action (V2 Phase
+    8) instead of a GitHub-installed webhook. Auth is a per-repo bearer
+    token (Repository.action_token, generated via
+    POST /repositories/{id}/action-token) the repo owner stores as a GitHub
+    Actions secret in their own repo — this works even when the connecting
+    user isn't a repo admin, since installing a webhook requires admin but
+    adding/using a workflow secret in your own Actions run does not require
+    SprintSync to hold any GitHub permission at all.
+
+    Body shape: {"event_name": "push"|"pull_request", "delivery_id": str,
+    "payload": <the exact GitHub webhook payload — this is what the
+    `github.event` context in a workflow already contains, so the action
+    forwards it verbatim rather than re-deriving it>}.
+    """
+    auth_header = request.headers.get("Authorization", "")
+    token = auth_header[7:] if auth_header.lower().startswith("bearer ") else ""
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing bearer token")
+
+    result = await db.execute(select(Repository).where(Repository.action_token == token))
+    repo = result.scalar_one_or_none()
+    if not repo:
+        logger.warning("webhook.action_token_rejected")
+        raise HTTPException(status_code=401, detail="Invalid or revoked action token")
+
+    try:
+        body = await request.json()
+    except Exception:
+        logger.warning("webhook.malformed_json", source="github_action", repo=repo.full_name)
+        raise HTTPException(status_code=400, detail="Malformed JSON payload")
+
+    event_type = body.get("event_name", "")
+    delivery_id = body.get("delivery_id", "")
+    payload = body.get("payload") or {}
+    log = logger.bind(event_type=event_type, delivery_id=delivery_id, repo=repo.full_name, source="github_action")
+
+    if not event_type:
+        log.info("webhook.skipped", reason="no event_name")
+        return {"status": "skipped", "reason": "no event_name"}
+
+    return await _dispatch_event(event_type, delivery_id, payload, repo, db, log)
 
 
 async def _handle_push(payload: dict, repo: Repository, db: AsyncSession) -> dict:

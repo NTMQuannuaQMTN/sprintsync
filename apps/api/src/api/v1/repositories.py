@@ -1,4 +1,5 @@
 """Repository CRUD and GitHub integration endpoints."""
+import secrets
 import uuid
 from typing import List
 
@@ -14,7 +15,7 @@ from src.models.profile import Profile
 from src.models.repository import Repository
 from src.models.task import Task, TaskStatus
 from src.models.suggestion import Suggestion, SuggestionStatus
-from src.schemas.repository import RepositoryOut, GitHubRepoItem
+from src.schemas.repository import ActionTokenOut, RepositoryOut, GitHubRepoItem
 from src.services.github import GitHubService
 from src.models.activity_log import ActivityLog, ActivityType
 
@@ -67,6 +68,7 @@ async def list_repositories(
         repo_out.task_count = total_tasks
         repo_out.done_count = done_tasks
         repo_out.pending_suggestions = pending_suggestions
+        repo_out.has_action_token = bool(repo.action_token)
         out.append(repo_out)
 
     return out
@@ -177,7 +179,9 @@ async def connect_repository(
     finally:
         await gh.close()
 
-    return RepositoryOut.model_validate(repo)
+    repo_out = RepositoryOut.model_validate(repo)
+    repo_out.has_action_token = bool(repo.action_token)
+    return repo_out
 
 
 @router.get("/{repo_id}", response_model=RepositoryOut)
@@ -210,6 +214,7 @@ async def get_repository(
     repo_out.task_count = task_result.scalar() or 0
     repo_out.done_count = done_result.scalar() or 0
     repo_out.pending_suggestions = pending_result.scalar() or 0
+    repo_out.has_action_token = bool(repo.action_token)
     return repo_out
 
 
@@ -292,7 +297,47 @@ async def reinstall_webhook(
     repo_out.task_count = task_result.scalar() or 0
     repo_out.done_count = done_result.scalar() or 0
     repo_out.pending_suggestions = pending_result.scalar() or 0
+    repo_out.has_action_token = bool(repo.action_token)
     return repo_out
+
+
+@router.post("/{repo_id}/action-token", response_model=ActionTokenOut)
+async def generate_action_token(
+    repo_id: uuid.UUID,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Generate (or rotate) this repo's GitHub Action bearer token — the
+    Phase 8 alternative to a GitHub webhook. Returns the plaintext token
+    exactly once; it isn't retrievable again afterward (same as most API-key
+    UX patterns), only rotatable. Rotating immediately invalidates the
+    previous token."""
+    result = await db.execute(
+        select(Repository).where(Repository.id == repo_id, Repository.owner_id == user_id)
+    )
+    repo = result.scalar_one_or_none()
+    if not repo:
+        raise HTTPException(status_code=404, detail="Repository not found")
+
+    repo.action_token = secrets.token_urlsafe(32)
+    await db.commit()
+    return ActionTokenOut(action_token=repo.action_token)
+
+
+@router.delete("/{repo_id}/action-token", status_code=status.HTTP_204_NO_CONTENT)
+async def revoke_action_token(
+    repo_id: uuid.UUID,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(Repository).where(Repository.id == repo_id, Repository.owner_id == user_id)
+    )
+    repo = result.scalar_one_or_none()
+    if not repo:
+        raise HTTPException(status_code=404, detail="Repository not found")
+    repo.action_token = None
+    await db.commit()
 
 
 @router.delete("/{repo_id}", status_code=status.HTTP_204_NO_CONTENT)

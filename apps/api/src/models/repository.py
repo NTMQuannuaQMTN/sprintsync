@@ -37,6 +37,17 @@ class Repository(UUIDMixin, TimestampMixin, Base):
     webhook_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     webhook_active: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
+    # GitHub Action alternative ingestion path (V2 Phase 8): a per-repo
+    # bearer credential the repo owner puts in their own GitHub Actions
+    # secrets, so their workflow can POST events to
+    # POST /webhook/action without SprintSync ever needing GitHub App/OAuth
+    # webhook-install permission on the repo -- useful when the connecting
+    # user isn't a repo admin (webhook install requires admin; a repo's own
+    # Actions workflow does not). Null until the user generates one via
+    # POST /repositories/{id}/action-token. Stored the same way
+    # Profile.github_access_token already is (see that model's docstring).
+    action_token: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, unique=True, index=True)
+
     # Computed health score (0-100, cached)
     health_score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
