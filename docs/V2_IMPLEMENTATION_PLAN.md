@@ -222,23 +222,48 @@ full live verification (real network call to a 3rd-party) · `[ ]` not started
     [-] Jira / Linear — deferred, see §9 (architecture supports adding them;
         not implemented this session — explicitly conditional in the brief:
         "if technically feasible" / "if time allows")
-[ ] Phase 8 — GitHub Action
-    [ ] action.yml + example workflow + docs — not yet started
-[ ] Phase 9 — AI summarization
-    [ ] Commit/PR/daily summary functions — not yet started
-[ ] Phase 10 — Project intelligence
-    [ ] Stale-task detection, unmatched-commit detection — not yet started
-[~] Phase 11 — Frontend / UX
+[x] Phase 8 — GitHub Action
+    [x] action.yml (composite, bash+jq+curl) + example workflow
+        (docs/examples/sprintsync-sync.yml) + docs/GITHUB_ACTION.md
+    [x] Repository.action_token (migration 005) + generate/rotate
+        (POST)/revoke (DELETE) /repositories/{id}/action-token
+    [x] POST /webhook/action — token-authenticated (repo resolved by token,
+        never by the payload's own claim), dispatches through the same
+        _handle_push/_handle_pull_request pipeline as the signed webhook
+    [x] Verified for real: ran action.yml's exact shell script locally
+        against a live instance + real DB row (happy path, duplicate-
+        delivery short-circuit, invalid-token failure branch all
+        confirmed) — not fired against an actual hosted Actions runner
+        (documented as a known limitation, see docs/GITHUB_ACTION.md)
+[x] Phase 9 — AI summarization
+    [x] summarize_commit / summarize_pull_request — same LLM-or-heuristic
+        pattern as Phase 4 — BLOCKED on credential for live LLM
+        verification; heuristic path fully tested end-to-end via real
+        endpoints (GET .../commits/{id}/summary,
+        GET .../pull_requests/{id}/summary)
+    [x] summarize_digest (daily/weekly) — heuristic-only by design (pure
+        count aggregation), GET /repositories/{id}/summary?period=day|week
+    [x] Closed a real gap found while wiring this up: PullRequest rows were
+        written by the webhook but had no read endpoint at all — added
+        GET /repositories/{id}/pull_requests (list/detail)
+[x] Phase 10 — Project intelligence
+    [x] Stale-task detection, unmatched-activity detection, unusually-
+        large-change detection — pure DB queries, no LLM involved,
+        GET /repositories/{id}/intelligence, fully tested against the real DB
+[ ] Phase 11 — Frontend / UX
     [x] Error states added to Dashboard/Activity (Phase 1 work)
-    [ ] Sync history / AI decision / confidence surface on Suggestions page —
-        not yet started; Suggestion rows now carry richer evidence
-        (work_type, confidence_tier, llm-vs-heuristic source) that the UI
-        doesn't display yet
-[~] Phase 12 — Observability
-    [ ] Structured logging exists (`structlog` import in reasoning.py) but is
-        wired at exactly one call site (`llm_call_failed_falling_back_to_
-        heuristic`) — not yet through the full ingestion → reasoning →
-        matching → sync pipeline
+    [ ] Not yet started this pass: surfacing sync history / AI decision /
+        confidence / summaries / project-intelligence data on any page —
+        every V2 backend feature above (Phases 7/9/10/Suggestion evidence)
+        is reachable via API only, not yet in the Next.js UI
+[x] Phase 12 — Observability
+    [x] Structured logging (structlog) now configured at app startup
+        (src/core/logging.py — JSON in production, console in dev) and
+        wired through the real ingestion → reasoning → sync pipeline:
+        webhook received/rejected/duplicate/ignored/processed, LLM-vs-
+        heuristic path taken, per-suggestion outcome, and external API
+        failures that were previously silently swallowed (commit-detail/
+        PR-files fetch failures now log a warning instead of a bare `pass`)
 [x] Phase 13 — Security
     [x] Prompt-injection boundary audit + fix (repo content never enters the
         system prompt; explicit delimiting)
@@ -325,7 +350,9 @@ full live verification (real network call to a 3rd-party) · `[ ]` not started
 | Live Notion API verification (Phase 7) | No Notion integration token available. Same treatment — real client code, mocked-response tests. |
 | Settings page real wiring | Out of scope for this session's V2 slice (not part of the GitHub-activity-to-task-board pipeline that is V2's actual differentiator); flagged, not fixed, to keep focus on the core mission. |
 | Full CI/CD (running this repo's tests on every push) | Would require adding repo secrets via GitHub's UI (an action only a human with repo admin access can do) — documented as a recommended next step, not performed. |
-| GitHub Action live end-to-end test | Requires a real repo with the Action installed and a real push — the Action's YAML/script is real and reviewed for correctness, but not fired against a live GitHub Actions runner in this session. |
+| GitHub Action live end-to-end test on a hosted runner | The Action's shell script was verified for real (locally, against a live API instance and DB row — see docs/GITHUB_ACTION.md), but not fired against an actual GitHub-hosted Actions runner, since no repo had the workflow installed. |
+| Notion integration — connect-and-use flow | `NotionBoardProvider` is real and unit-tested (mocked Notion responses) but no endpoint/UI lets a user actually connect a workspace and have it used (would need the `Integration` model wired to a real connect flow) — the provider exists but isn't reachable by a real user yet. |
+| Frontend/UX for Phases 7/9/10 and richer Suggestion evidence | Every new backend capability this session (project intelligence, summaries, PR read API, action-token management) is reachable via API only — no Next.js page surfaces any of it yet. |
 
 ## 10. Testing Strategy
 
@@ -344,17 +371,21 @@ full live verification (real network call to a 3rd-party) · `[ ]` not started
 
 ## 11. Definition of Done (for this session's V2 slice)
 
-- [x] `pytest` passes (including new tests) — 71/71 as of the diff-excerpt
-  fix + ai.py dead-code removal commit
-- [x] `ruff check` clean
-- [~] `mypy` — 23 errors, all pre-existing SQLAlchemy string-forward-ref
-  relationship warnings unrelated to V2 changes (tracked, not newly caused)
+- [x] `pytest` passes (including new tests) — 98/98 as of the Phase 8
+  (GitHub Action) commit
+- [x] `ruff check` clean across `src/` and `tests/`
+- [~] `mypy` — 27 errors, all pre-existing (SQLAlchemy string-forward-ref
+  relationship warnings, one pre-existing `sort` key type-inference note in
+  reasoning.py, one async-generator note in database.py, four pre-existing
+  assignment errors in suggestions.py) — none newly introduced this
+  session (one was: core/logging.py's renderer needed an explicit type
+  annotation, fixed same-commit)
 - [ ] `tsc --noEmit` / `npm run build` — not re-verified since Phase 11
   frontend work hasn't started; last known-good was pre-Phase-3
 - [x] Webhook signature bypass fixed and verified live against production
-- [~] `docs/V2_IMPLEMENTATION_PLAN.md` (this file) — corrected 2026-08-25
+- [x] `docs/V2_IMPLEMENTATION_PLAN.md` (this file) — corrected 2026-08-25
   after finding Phases 8-12 were marked done without the code existing;
-  now reflects actual state
-- [ ] `docs/V2_TEST_REPORT.md` — still only has the original baseline, not
-  yet appended with this session's actual runs (see doc itself)
+  kept current through the Phase 8/9/10/12 commits that followed
+- [~] `docs/V2_TEST_REPORT.md` — appended with real entries through the
+  Phase 8 commit; not yet caught up with every commit since (see doc itself)
 - [ ] README — not yet updated for V2

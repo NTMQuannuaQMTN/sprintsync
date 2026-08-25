@@ -61,4 +61,22 @@ same `analyze_activity` pipeline the webhook uses (rather than the old
 `ai_service.analyze_commit`) introduced no regression, and removing the now-
 dead heuristic from `ai.py` (superseded by `task_matching.py`) is safe.
 
+## 2026-08-25 — Phase 12 (observability), Phase 10 (project intelligence), Phase 9 (summarization), Phase 8 (GitHub Action)
+
+| Check | Command | Result |
+|---|---|---|
+| Full backend lint | `.venv/bin/ruff check src/ tests/` | All checks passed, after every phase below |
+| Full backend tests, after Phase 12 | `.venv/bin/pytest -q` | 71 passed |
+| Full backend tests, after Phase 10 | `.venv/bin/pytest -q` | 76 passed (+5 `test_project_intelligence.py`) |
+| Full backend tests, after Phase 9 | `.venv/bin/pytest -q` | 90 passed (+14: `test_summarization.py`, `test_summary_endpoints.py`) |
+| Full backend tests, after Phase 8 | `.venv/bin/pytest -q` | 98 passed (+8 `test_github_action_ingestion.py`) |
+| Backend types | `.venv/bin/mypy src` | 28 errors immediately after Phase 12 — one was newly introduced (`core/logging.py`'s renderer variable needed an explicit `Union[ConsoleRenderer, JSONRenderer]` annotation; mypy couldn't unify the if/else branches otherwise). Fixed same-session; re-ran: 27 errors, all pre-existing and unrelated to this session's changes (see `docs/V2_IMPLEMENTATION_PLAN.md` §11 for the itemized breakdown) |
+| GitHub Action end-to-end (real, not just reviewed) | Ran `action.yml`'s exact shell script locally (`bash`+`jq`+`curl`, with `GITHUB_EVENT_PATH`/`GITHUB_EVENT_NAME`/`GITHUB_RUN_ID` set the way GitHub's runner sets them) against a real local `uvicorn` instance and a real DB row (repo + `action_token` inserted directly, then cleaned up) | Happy path: HTTP 200, `{"status":"ok","commits_processed":1,...}`. Duplicate delivery: second identical request returned `{"status":"duplicate",...}` instead of reprocessing. Invalid token: HTTP 401, which the script's `[ "${HTTP_STATUS}" -ge 400 ]` branch correctly turns into a `::error::` annotation + `exit 1`. |
+| Alembic migration 005 (`repositories.action_token`) | `.venv/bin/alembic upgrade head` | Failed first attempt — `alembic/env.py` had no protection against Supabase's Transaction Pooler breaking named prepared statements (same class of bug `core/database.py` already documents and works around, but never ported to the migration runner). Fixed `env.py` to build its engine the same way (`NullPool` + `statement_cache_size=0` + unnamed prepared statements); migration then applied cleanly. Verified column exists via a direct `information_schema.columns` query against the real DB. |
+
+Confirms: Phases 8/9/10/12 are real, working code exercised by real tests
+and (for the GitHub Action) a real manual end-to-end run — not just
+"the checklist says done." The one new mypy error this pass introduced
+was caught and fixed before moving on, not left for later.
+
 (Entries below are appended in order as V2 work proceeds.)

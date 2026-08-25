@@ -11,6 +11,7 @@ webhook secret, the Anthropic API key, or Notion tokens as log fields —
 call sites only log ids, names, counts, and error messages.
 """
 import logging
+from typing import Union
 
 import structlog
 
@@ -26,6 +27,7 @@ def configure_logging() -> None:
         structlog.processors.TimeStamper(fmt="iso"),
     ]
 
+    renderer: Union[structlog.dev.ConsoleRenderer, structlog.processors.JSONRenderer]
     if settings.ENV == "development":
         renderer = structlog.dev.ConsoleRenderer()
     else:
