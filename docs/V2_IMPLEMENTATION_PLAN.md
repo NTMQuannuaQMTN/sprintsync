@@ -412,6 +412,5 @@ full live verification (real network call to a 3rd-party) · `[ ]` not started
 - [x] `docs/V2_IMPLEMENTATION_PLAN.md` (this file) — corrected 2026-08-25
   after finding Phases 8-12 were marked done without the code existing;
   kept current through the Phase 8/9/10/12 commits that followed
-- [~] `docs/V2_TEST_REPORT.md` — appended with real entries through the
-  Phase 8 commit; not yet caught up with every commit since (see doc itself)
-- [ ] README — not yet updated for V2
+- [x] `docs/V2_TEST_REPORT.md` — appended with real entries through Phase 11
+- [x] README — added (previously didn't exist at all in this repo)
