@@ -107,10 +107,14 @@ export interface Suggestion {
   explanation: string
   confidence_score: number
   evidence: {
-    commit_message?: string
-    matching_files?: string[]
-    matching_keywords?: string[]
-    reasoning?: string[]
+    source?: 'llm' | 'heuristic'
+    // LLM-path fields (services/ai_reasoning/reasoning.py's _finalize_llm)
+    work_type?: string
+    summary?: string
+    // Heuristic-path fields (task_matching.py, via _analyze_with_heuristic)
+    matched_keywords?: string[]
+    matched_files?: string[]
+    explicit_reference?: boolean
   } | null
   reviewed_at: string | null
   reviewer_note: string | null

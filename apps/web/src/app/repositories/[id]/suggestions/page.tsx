@@ -70,16 +70,51 @@ function SuggestionCard({ repoId, suggestion }: { repoId: string; suggestion: Su
 
       {suggestion.evidence && (
         <div className="bg-gray-50 border border-gray-100 rounded-lg p-3 mb-3 space-y-1">
-          {suggestion.evidence.matching_keywords && suggestion.evidence.matching_keywords.length > 0 && (
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {suggestion.evidence.source && (
+              <span
+                className={cn(
+                  'text-[10px] font-medium px-1.5 py-0.5 rounded',
+                  suggestion.evidence.source === 'llm'
+                    ? 'bg-violet-50 text-violet-700'
+                    : 'bg-blue-50 text-blue-700',
+                )}
+                title={
+                  suggestion.evidence.source === 'llm'
+                    ? 'Produced by a real Claude API call, not a keyword heuristic'
+                    : 'Produced by the keyword/filename heuristic (no ANTHROPIC_API_KEY configured, or the LLM call failed)'
+                }
+              >
+                {suggestion.evidence.source === 'llm' ? 'AI reasoning' : 'Heuristic'}
+              </span>
+            )}
+            {suggestion.evidence.work_type && (
+              <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">
+                {suggestion.evidence.work_type}
+              </span>
+            )}
+            {suggestion.evidence.explicit_reference && (
+              <span
+                className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700"
+                title="Matched via an explicit #taskid reference in the commit/PR text"
+              >
+                Explicit reference
+              </span>
+            )}
+          </div>
+          {suggestion.evidence.summary && (
+            <p className="text-[11px] text-gray-600">{suggestion.evidence.summary}</p>
+          )}
+          {suggestion.evidence.matched_keywords && suggestion.evidence.matched_keywords.length > 0 && (
             <p className="text-[11px] text-gray-500">
               <span className="font-medium text-gray-600">Matching keywords:</span>{' '}
-              {suggestion.evidence.matching_keywords.join(', ')}
+              {suggestion.evidence.matched_keywords.join(', ')}
             </p>
           )}
-          {suggestion.evidence.matching_files && suggestion.evidence.matching_files.length > 0 && (
+          {suggestion.evidence.matched_files && suggestion.evidence.matched_files.length > 0 && (
             <p className="text-[11px] text-gray-500 font-mono">
               <span className="font-sans font-medium text-gray-600 mr-1">Files:</span>
-              {suggestion.evidence.matching_files.join(', ')}
+              {suggestion.evidence.matched_files.join(', ')}
             </p>
           )}
         </div>
