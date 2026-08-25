@@ -5,8 +5,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.core.config import settings
+from src.core.logging import configure_logging
 from src.models import base  # noqa: F401 — ensure models are imported for Alembic
 from src.api.v1.router import api_router
+
+configure_logging()
 
 
 @asynccontextmanager

@@ -15,6 +15,7 @@ V2 changes from V1:
 from datetime import datetime, timezone
 from typing import Optional
 
+import structlog
 from fastapi import APIRouter, Request, HTTPException, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
@@ -31,6 +32,8 @@ from src.models.profile import Profile
 from src.models.webhook_delivery import WebhookDelivery
 from src.services.github import verify_webhook_signature, GitHubService
 from src.services.ai_reasoning.reasoning import analyze_activity
+
+logger = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/webhook", tags=["webhook"])
 
@@ -68,40 +71,50 @@ async def github_webhook(request: Request, db: AsyncSession = Depends(get_db)):
     suggestions."""
     body = await request.body()
 
-    signature = request.headers.get("X-Hub-Signature-256", "")
-    if not verify_webhook_signature(body, signature):
-        raise HTTPException(status_code=401, detail="Invalid webhook signature")
-
     event_type = request.headers.get("X-GitHub-Event", "")
     delivery_id = request.headers.get("X-GitHub-Delivery", "")
+    log = logger.bind(event_type=event_type, delivery_id=delivery_id)
+
+    signature = request.headers.get("X-Hub-Signature-256", "")
+    if not verify_webhook_signature(body, signature):
+        log.warning("webhook.signature_rejected")
+        raise HTTPException(status_code=401, detail="Invalid webhook signature")
 
     try:
         payload = await request.json()
     except Exception:
+        log.warning("webhook.malformed_json")
         raise HTTPException(status_code=400, detail="Malformed JSON payload")
 
     repo_full_name = (payload.get("repository") or {}).get("full_name")
     if not repo_full_name:
+        log.info("webhook.skipped", reason="no repo name")
         return {"status": "skipped", "reason": "no repo name"}
+    log = log.bind(repo=repo_full_name)
 
     result = await db.execute(select(Repository).where(Repository.full_name == repo_full_name))
     repo = result.scalar_one_or_none()
     if not repo:
+        log.info("webhook.skipped", reason="repo not connected")
         return {"status": "skipped", "reason": "repo not connected"}
 
     if await _is_duplicate_delivery(db, delivery_id, event_type, repo.id):
         await db.commit()
+        log.info("webhook.duplicate_delivery_ignored")
         return {"status": "duplicate", "delivery_id": delivery_id}
 
+    log.info("webhook.received")
     if event_type == "push":
         response_body = await _handle_push(payload, repo, db)
     elif event_type == "pull_request":
         response_body = await _handle_pull_request(payload, repo, db)
     else:
         await db.commit()  # still persist the delivery record even for ignored events
+        log.info("webhook.ignored")
         return {"status": "ignored", "event": event_type}
 
     await db.commit()
+    log.info("webhook.processed", **{k: v for k, v in response_body.items() if k != "status"})
     return response_body
 
 
@@ -163,8 +176,9 @@ async def _handle_push(payload: dict, repo: Repository, db: AsyncSession) -> dic
                         }
                         for f in detail.get("files", [])
                     ]
-                except Exception:
-                    pass  # diff enrichment is best-effort; filename-only fallback stands
+                except Exception as e:
+                    # diff enrichment is best-effort; filename-only fallback stands
+                    logger.warning("webhook.commit_detail_fetch_failed", repo=repo.full_name, sha=sha, error=str(e))
 
             commit = Commit(
                 repository_id=repo.id,
@@ -219,6 +233,16 @@ async def _handle_push(payload: dict, repo: Repository, db: AsyncSession) -> dic
                     evidence=s["evidence"],
                 ))
                 new_suggestions += 1
+                logger.info(
+                    "webhook.suggestion_created",
+                    repo=repo.full_name,
+                    sha=sha,
+                    task_id=s["task_id"],
+                    proposed_status=s["proposed_status"],
+                    confidence=s["confidence"],
+                    confidence_tier=s.get("confidence_tier"),
+                    source=s["evidence"].get("source"),
+                )
 
             commit.analyzed = True
 
@@ -327,8 +351,8 @@ async def _handle_pull_request(payload: dict, repo: Repository, db: AsyncSession
                 for f in raw_files
             ]
             pr.files_changed = files_changed
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("webhook.pr_files_fetch_failed", repo=repo.full_name, pr_number=number, error=str(e))
         finally:
             await gh.close()
 
@@ -376,6 +400,16 @@ async def _handle_pull_request(payload: dict, repo: Repository, db: AsyncSession
             evidence=s["evidence"],
         ))
         new_suggestions += 1
+        logger.info(
+            "webhook.suggestion_created",
+            repo=repo.full_name,
+            pr_number=number,
+            task_id=s["task_id"],
+            proposed_status=s["proposed_status"],
+            confidence=s["confidence"],
+            confidence_tier=s.get("confidence_tier"),
+            source=s["evidence"].get("source"),
+        )
 
     pr.analyzed = True
 

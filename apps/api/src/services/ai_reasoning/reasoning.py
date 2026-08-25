@@ -62,14 +62,31 @@ async def analyze_activity(
             analysis = await _analyze_with_llm(
                 api_key, activity_type, text_signals, tasks, changed_files, files_with_patches
             )
-            return _finalize_llm(analysis, event_key, repo_status_mapping)
+            result = _finalize_llm(analysis, event_key, repo_status_mapping)
+            logger.info(
+                "ai_reasoning.llm_call_succeeded",
+                activity_type=activity_type,
+                work_type=analysis.work_type.value,
+                tasks_considered=len(tasks),
+                suggestions_produced=len(result),
+            )
+            return result
         except Exception as e:
             logger.warning(
                 "ai_reasoning.llm_call_failed_falling_back_to_heuristic",
                 error=str(e),
                 activity_type=activity_type,
             )
-    return _analyze_with_heuristic(text_signals, tasks, event_key, changed_files, repo_status_mapping)
+    else:
+        logger.info("ai_reasoning.no_api_key_using_heuristic", activity_type=activity_type)
+    result = _analyze_with_heuristic(text_signals, tasks, event_key, changed_files, repo_status_mapping)
+    logger.info(
+        "ai_reasoning.heuristic_call_completed",
+        activity_type=activity_type,
+        tasks_considered=len(tasks),
+        suggestions_produced=len(result),
+    )
+    return result
 
 
 async def _analyze_with_llm(
