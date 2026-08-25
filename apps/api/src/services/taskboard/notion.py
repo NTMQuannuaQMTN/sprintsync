@@ -79,6 +79,14 @@ class NotionBoardProvider(TaskBoardProvider):
         self._data_source_id = data_sources[0]["id"]
         return self._data_source_id
 
+    async def verify_connection(self) -> None:
+        """Real network call confirming the token can resolve the
+        configured database — raises on failure (bad token, wrong
+        database_id, no data sources). Used at connect time
+        (api/v1/integrations.py) so a bad credential fails loudly
+        immediately rather than silently at the next suggestion approval."""
+        await self._get_data_source_id()
+
     async def find_task(self, query: str) -> Optional[TaskBoardTask]:
         client = await self._get_client()
         data_source_id = await self._get_data_source_id()

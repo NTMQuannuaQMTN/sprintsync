@@ -13,6 +13,7 @@ from src.api.v1.commits import router as commits_router
 from src.api.v1.intelligence import router as intelligence_router
 from src.api.v1.pull_requests import router as pull_requests_router
 from src.api.v1.summary import router as summary_router
+from src.api.v1.integrations import router as integrations_router
 
 api_router = APIRouter()
 
@@ -28,3 +29,4 @@ api_router.include_router(commits_router)
 api_router.include_router(intelligence_router)
 api_router.include_router(pull_requests_router)
 api_router.include_router(summary_router)
+api_router.include_router(integrations_router)

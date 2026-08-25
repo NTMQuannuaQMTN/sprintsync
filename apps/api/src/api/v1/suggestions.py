@@ -15,6 +15,7 @@ from src.models.task import Task
 from src.models.commit import Commit
 from src.models.activity_log import ActivityLog, ActivityType
 from src.schemas.suggestion import SuggestionOut, SuggestionReview, BulkReviewResult
+from src.services.taskboard.factory import mirror_status_to_external_board
 
 router = APIRouter(prefix="/repositories/{repo_id}/suggestions", tags=["suggestions"])
 
@@ -89,6 +90,7 @@ async def approve_all_suggestions(
         return BulkReviewResult(count=0)
 
     now = datetime.now(timezone.utc)
+    to_mirror: List[tuple] = []
     for suggestion in pending:
         suggestion.status = SuggestionStatus.APPROVED
         suggestion.reviewed_at = now
@@ -99,6 +101,7 @@ async def approve_all_suggestions(
             task = tr.scalar_one_or_none()
             if task:
                 task.status = suggestion.proposed_status  # type: ignore
+                to_mirror.append((task.title, suggestion.proposed_status))
 
     db.add(ActivityLog(
         user_id=user_id,
@@ -108,6 +111,12 @@ async def approve_all_suggestions(
     ))
 
     await db.commit()
+
+    # Best-effort external-board mirror (e.g. Notion) — never blocks or
+    # reverts the internal approval above, which already committed.
+    for task_title, proposed_status in to_mirror:
+        await mirror_status_to_external_board(user_id, task_title, proposed_status, db)
+
     return BulkReviewResult(count=len(pending))
 
 
@@ -195,11 +204,13 @@ async def approve_suggestion(
     suggestion.reviewer_note = body.note
 
     # Apply the proposed task status change
+    task_title: Optional[str] = None
     if suggestion.task_id and suggestion.proposed_status:
         tr = await db.execute(select(Task).where(Task.id == suggestion.task_id))
         task = tr.scalar_one_or_none()
         if task:
             task.status = suggestion.proposed_status  # type: ignore
+            task_title = task.title
 
     # Activity log
     db.add(ActivityLog(
@@ -212,6 +223,12 @@ async def approve_suggestion(
 
     await db.commit()
     await db.refresh(suggestion)
+
+    # Best-effort external-board mirror (e.g. Notion) — never blocks or
+    # reverts the internal approval above, which already committed.
+    if task_title and suggestion.proposed_status:
+        await mirror_status_to_external_board(user_id, task_title, suggestion.proposed_status, db)
+
     return await _enrich(suggestion, db)
 
 
