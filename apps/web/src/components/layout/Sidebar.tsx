@@ -12,6 +12,7 @@ import {
   GitCommit,
   Settings,
   LogOut,
+  Radar,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/providers/AuthProvider'
@@ -43,6 +44,7 @@ export default function Sidebar({ pendingSuggestions = 0, repoId, repoName }: Si
           badge: pendingSuggestions,
         },
         { href: `/repositories/${repoId}/activity`, label: 'Activity', icon: Activity },
+        { href: `/repositories/${repoId}/intelligence`, label: 'Intelligence', icon: Radar },
       ]
     : []
 
